@@ -1,25 +1,41 @@
 from typing import Tuple
 
-# Path to the trained model weights (.onnx file).
-# Relative paths resolve from the project root.
 MODEL_PATH = "tasks/object_detection/models/best.onnx"
 
 
 def NUMBER_FRAMES_SKIPPED() -> int:
-    # Higher = run inference less often (cheaper).
     return 1
 
 
 def filter_by_classes(pred_class: int) -> bool:
-    """Return False to drop this prediction."""
-    return True
+    # stop only for duckies
+    # ignore signs.
+    return pred_class in [0, 1, 2]
 
 
 def filter_by_scores(score: float) -> bool:
-    """Confidence in [0.0, 1.0]. Return False to drop low-confidence boxes."""
-    return True
+    return score >= 0.55
 
 
 def filter_by_bboxes(bbox: Tuple[int, int, int, int]) -> bool:
-    """bbox is (xmin, ymin, xmax, ymax) in pixels. Return False to drop."""
+    xmin, ymin, xmax, ymax = bbox
+
+    width = xmax - xmin
+    height = ymax - ymin
+
+    if width <= 5 or height <= 5:
+        return False
+
+    area = width * height
+
+    # ignore tiny far-away detections.
+    if area < 700:
+        return False
+
+    # opposing-lane filter:
+    # keep detections mostly in our/right lane and center.
+    cx = (xmin + xmax) / 2
+    if cx < 416 * 0.35:
+        return False
+
     return True

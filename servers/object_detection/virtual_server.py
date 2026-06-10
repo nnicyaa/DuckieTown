@@ -5,7 +5,7 @@ import time
 import queue
 import socket
 
-script_dir   = os.path.dirname(os.path.abspath(__file__))
+script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(script_dir, '..', '..')
 sys.path.insert(0, project_root)
 
@@ -14,7 +14,8 @@ from flask import Flask, Response, render_template_string, jsonify, request
 
 from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.object_detection.packages.agent import ObjectDetectionAgent, CLASS_NAMES
-from tasks.object_detection.packages.stop_activity import should_stop as student_should_stop
+from tasks.object_detection.packages.stop_behavior import should_stop as student_should_stop
+from tasks.object_detection.packages.stop_behavior import reset_fsm
 from servers.object_detection.visualization import draw_detections
 from servers.templates.object_detection import OBJECT_DETECTION_TEMPLATE as HTML_TEMPLATE
 
@@ -25,27 +26,27 @@ from launcher.ports import find_available_port
 from launcher.config import GODOT_SCENES
 from servers.common import make_frame_generator, shutdown_cleanup, suppress_http_logs
 
-
-app        = Flask(__name__)
+app = Flask(__name__)
 lane_agent = None
-det_agent  = None
-camera     = None
-wheels     = None
-running    = False
+det_agent = None
+camera = None
+wheels = None
+running = False
 manual_mode = False
 stop_event = threading.Event()
 
-_frame_queue     = queue.Queue(maxsize=1)
+_frame_queue = queue.Queue(maxsize=1)
 _last_detections = []
-_detection_lock  = threading.Lock()
-_stopped_by_det  = False
-_stop_reason     = ''
+_detection_lock = threading.Lock()
+_stopped_by_det = False
+_stop_reason = ''
+_cooldown_until = 0.0
 
-keys_pressed     = {'up': False, 'down': False, 'left': False, 'right': False}
-_keys_lock       = threading.Lock()
+keys_pressed = {'up': False, 'down': False, 'left': False, 'right': False}
+_keys_lock = threading.Lock()
 _keys_last_update = time.time()
 
-_current_scene   = 'object_detection'
+_current_scene = 'object_detection'
 
 
 def detection_loop():
@@ -99,21 +100,30 @@ def manual_control_loop():
         time.sleep(0.05)
 
 
-def _should_stop(detections):
+def _should_stop(detections, current_lane_omega=0.0):
+    global _cooldown_until
     if det_agent is None:
-        return False, ''
-    return student_should_stop(detections, det_agent.img_size)
+        return False, '', -1.0, -1.0
+
+    # Pass-through execution
+    flag, reason, v, omega = student_should_stop(detections, det_agent.img_size, current_lane_omega)
+
+    # Capture state change metrics down to the local server profile context
+    if reason == "Maneuver Completed":
+        _cooldown_until = time.time() + 2.5
+
+    return flag, reason, v, omega
 
 
 def visualize(frame_rgb):
-    global _stopped_by_det, _stop_reason
+    global _stopped_by_det, _stop_reason, _cooldown_until
 
+    current_time = time.time()
     bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
 
     if wheels is None:
         return bgr
 
-    # Push frame to detection queue
     if det_agent is not None and det_agent.model_loaded:
         small = cv2.resize(frame_rgb, (det_agent.img_size, det_agent.img_size))
         try:
@@ -126,16 +136,41 @@ def visualize(frame_rgb):
 
     if manual_mode:
         _stopped_by_det = False
-        _stop_reason    = ''
+        _stop_reason = ''
+
     elif lane_agent is not None:
+        # 1. FILTER: Erase background noise
+        clean_detections = []
+        for det in detections:
+            (x1, y1, x2, y2), score, cls_id = det
+            cx = (x1 + x2) / 2
+            if cx < (det_agent.img_size * 0.40):
+                continue
+            clean_detections.append(det)
+
+        # 2. Track normal baseline lane commands
         pwm_left, pwm_right = lane_agent.compute_commands(frame_rgb)
 
-        should_stop_flag, reason = _should_stop(detections)
+        # 3. Process FSM using our CLEAN list
+        should_stop_flag, reason, override_v, override_omega = _should_stop(clean_detections,
+                                                                            current_lane_omega=pwm_right)
         _stopped_by_det = should_stop_flag
-        _stop_reason    = reason
+        _stop_reason = reason
 
-        if running and not should_stop_flag and not wheels.is_game_over():
-            wheels.set_wheels_speed(pwm_left, pwm_right)
+        # 4. Actuator speed transmission
+        if running and not wheels.is_game_over():
+            if override_v >= 0.0:
+                left_speed = override_v - (override_omega * 0.1)
+                right_speed = override_v + (override_omega * 0.1)
+                wheels.set_wheels_speed(left_speed, right_speed)
+            elif not should_stop_flag:
+                # Local server-side steering safety rails
+                if current_time < _cooldown_until and pwm_right > 0.25:
+                    pwm_right = 0.20
+
+                wheels.set_wheels_speed(pwm_left, pwm_right)
+            else:
+                wheels.set_wheels_speed(0.0, 0.0)
         else:
             wheels.set_wheels_speed(0.0, 0.0)
 
@@ -143,7 +178,7 @@ def visualize(frame_rgb):
         oh, ow = bgr.shape[:2]
         sx = ow / det_agent.img_size
         sy = oh / det_agent.img_size
-        scaled = [((int(x1*sx), int(y1*sy), int(x2*sx), int(y2*sy)), s, c)
+        scaled = [((int(x1 * sx), int(y1 * sy), int(x2 * sx), int(y2 * sy)), s, c)
                   for (x1, y1, x2, y2), s, c in detections]
         draw_detections(bgr, scaled)
 
@@ -157,15 +192,18 @@ generate_frames = make_frame_generator(lambda: camera, visualize, quality=50)
 def index():
     return render_template_string(HTML_TEMPLATE, config=det_agent, hostname=socket.gethostname(), virtual=True)
 
+
 @app.route('/video')
 def video():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
 
 @app.route('/start', methods=['POST'])
 def start():
     global running
     running = True
     return jsonify({'status': 'running'})
+
 
 @app.route('/stop', methods=['POST'])
 def stop():
@@ -175,17 +213,23 @@ def stop():
         wheels.set_wheels_speed(0.0, 0.0)
     return jsonify({'status': 'stopped'})
 
+
 @app.route('/reset', methods=['POST'])
 def reset():
-    global _stopped_by_det, _stop_reason, _last_detections, running
+    global _stopped_by_det, _stop_reason, _last_detections, running, _cooldown_until
     if wheels:
         wheels.reset_game()
+
+    _cooldown_until = 0.0
+    reset_fsm()
+
     _stopped_by_det = False
-    _stop_reason    = ''
-    running         = True
+    _stop_reason = ''
+    running = True
     with _detection_lock:
         _last_detections = []
     return jsonify({'status': 'reset', 'running': running})
+
 
 @app.route('/set_mode', methods=['POST'])
 def set_mode():
@@ -196,6 +240,7 @@ def set_mode():
         wheels.set_wheels_speed(0.0, 0.0)
     return jsonify({'mode': 'manual' if manual_mode else 'auto'})
 
+
 @app.route('/switch_scene', methods=['POST'])
 def switch_scene():
     global manual_mode, _current_scene
@@ -205,7 +250,6 @@ def switch_scene():
     if wheels:
         wheels.change_scene(GODOT_SCENES[target])
     _current_scene = target
-    # Auto-set drive mode based on scene
     if target == 'introduction':
         manual_mode = True
     else:
@@ -213,6 +257,7 @@ def switch_scene():
         if wheels:
             wheels.set_wheels_speed(0.0, 0.0)
     return jsonify({'scene': target, 'manual_mode': manual_mode})
+
 
 @app.route('/keys', methods=['POST'])
 def update_keys():
@@ -224,6 +269,7 @@ def update_keys():
     _keys_last_update = time.time()
     return jsonify({'status': 'ok'})
 
+
 @app.route('/remove_objects', methods=['POST'])
 def remove_objects():
     global _stopped_by_det, _stop_reason, _last_detections
@@ -231,10 +277,11 @@ def remove_objects():
     if wheels and name_filter:
         wheels.remove_objects(name_filter)
     _stopped_by_det = False
-    _stop_reason    = ''
+    _stop_reason = ''
     with _detection_lock:
         _last_detections = []
     return jsonify({'status': 'ok', 'filter': name_filter})
+
 
 @app.route('/set_threshold', methods=['POST'])
 def set_threshold():
@@ -243,21 +290,22 @@ def set_threshold():
         det_agent.conf_threshold = float(value)
     return jsonify({'conf_threshold': det_agent.conf_threshold if det_agent else None})
 
+
 @app.route('/status')
 def status():
     with _detection_lock:
         dets = list(_last_detections)
     return jsonify({
-        'running':              running,
-        'manual_mode':          manual_mode,
-        'current_scene':        _current_scene,
-        'game_over':            wheels.is_game_over() if wheels else False,
-        'model_loaded':         det_agent.model_loaded if det_agent else False,
-        'load_error':           det_agent.load_error if det_agent else None,
-        'trt_building':         getattr(det_agent, 'trt_building', False) if det_agent else False,
+        'running': running,
+        'manual_mode': manual_mode,
+        'current_scene': _current_scene,
+        'game_over': wheels.is_game_over() if wheels else False,
+        'model_loaded': det_agent.model_loaded if det_agent else False,
+        'load_error': det_agent.load_error if det_agent else None,
+        'trt_building': getattr(det_agent, 'trt_building', False) if det_agent else False,
         'stopped_by_detection': _stopped_by_det,
-        'stop_reason':          _stop_reason,
-        'conf_threshold':       det_agent.conf_threshold if det_agent else 0.5,
+        'stop_reason': _stop_reason,
+        'conf_threshold': det_agent.conf_threshold if det_agent else 0.5,
         'detections': [
             {'class': CLASS_NAMES.get(c, str(c)), 'score': round(s, 3), 'bbox': list(b)}
             for b, s, c in dets
@@ -270,7 +318,7 @@ def main():
 
     import argparse
     ap = argparse.ArgumentParser()
-    ap.add_argument('--port',       type=int, default=5000)
+    ap.add_argument('--port', type=int, default=5000)
     ap.add_argument('--frame-port', type=int, default=5001)
     ap.add_argument('--wheel-port', type=int, default=5002)
     ap.add_argument('--godot-host', type=str, default='localhost')
@@ -302,7 +350,7 @@ def main():
     camera = GodotCameraDriver(godot_config=GodotCameraConfig(host='0.0.0.0', port=args.frame_port))
     camera.start()
 
-    threading.Thread(target=detection_loop,     daemon=True).start()
+    threading.Thread(target=detection_loop, daemon=True).start()
     threading.Thread(target=manual_control_loop, daemon=True).start()
 
     web_port = find_available_port(args.port)

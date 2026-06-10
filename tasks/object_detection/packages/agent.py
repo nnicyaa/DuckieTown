@@ -314,7 +314,75 @@ class ObjectDetectionAgent:
         if self.frame_count == 1:
             print(f"[ObjectDetection] Raw output shape: {raw.shape}")
 
-        return self._postprocess(raw, orig_w, orig_h)
+        # Return all raw detections to let the state machine make the strategic choices!
+        detections = self._postprocess(raw, orig_w, orig_h)
+        if not detections:
+            return []
+
+        return detections
+
+    # def detect(self, frame_rgb: np.ndarray) -> List[Detection]:
+    #     self.frame_count += 1
+    #
+    #     if not self.model_loaded:
+    #         return []
+    #
+    #     skip = self._frame_skip()
+    #     if skip > 0 and (self.frame_count % (skip + 1)) != 0:
+    #         return None
+    #
+    #     orig_h, orig_w = frame_rgb.shape[:2]
+    #     try:
+    #         raw = self._infer(frame_rgb)
+    #     except Exception as e:
+    #         print(f"[ObjectDetection] Inference error: {e}")
+    #         return None
+    #
+    #     if self.frame_count == 1:
+    #         print(f"[ObjectDetection] Raw output shape: {raw.shape}")
+    #
+    #     # get detections
+    #     detections = self._postprocess(raw, orig_w, orig_h)
+    #     if not detections:
+    #         return []
+    #
+    #     # filter using a strict horizontal driving lane window
+    #     filtered_detections = []
+    #
+    #     # define the exact bounds of driving lane in the video frame
+    #     left_lane_line = orig_w * 0.40  # anything left of this is oncoming traffic
+    #     right_lane_line = orig_w * 0.75  # anything right of this is out in the field/sidewalk
+    #
+    #   # sign -- to stop
+    #     for det in detections:
+    #         bbox, score, cls_id = det
+    #         x1, y1, x2, y2 = bbox
+    #
+    #         # Calculate the middle point of the object
+    #         bbox_center_x = (x1 + x2) / 2
+    #
+    #         # 1. OPPOSING LANE CHECK: Always ignore things on the far left
+    #         if bbox_center_x < left_lane_line:
+    #             print(f"[ObjectDetection] Ignoring opposing lane object at X: {bbox_center_x}")
+    #             continue
+    #
+    #         # 2. RIGHT SIDE CHECK WITH SIGN EXCEPTION:
+    #         # If it's a duckie/truck (0 or 1) and it's out in the field (> 0.75), ignore it.
+    #         # But if it's a sign (2), allow it to be detected further right (up to 90% of the screen)!
+    #         if cls_id in [0, 1]:
+    #             if bbox_center_x > right_lane_line:
+    #                 print(f"[ObjectDetection] Ignoring off-road duckie/truck at X: {bbox_center_x}")
+    #                 continue
+    #         elif cls_id == 2:
+    #             # Sign boundary allowance (e.g., up to 90% of the screen width)
+    #             if bbox_center_x > (orig_w * 0.90):
+    #                 print(f"[ObjectDetection] Ignoring far away sign at X: {bbox_center_x}")
+    #                 continue
+    #
+    #         # If it passes these conditions, it's a valid obstacle/sign!
+    #         filtered_detections.append(det)
+    #     return filtered_detections
+
 
     def _infer(self, frame_rgb: np.ndarray) -> np.ndarray:
         if self._backend == 'trt':
