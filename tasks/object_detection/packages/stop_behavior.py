@@ -143,7 +143,7 @@ def should_stop(detections: List[Detection], img_size: int, current_lane_omega: 
             _state = LANE_FOLLOWING
             _seen_frames = 0
             _clear_frames = 0
-            _cooldown_until = current_time + 2.5
+            _cooldown_until = current_time + 3.5
             return False, "Maneuver Completed", -1.0, -1.0
 
     # -----------------------------------------------------------

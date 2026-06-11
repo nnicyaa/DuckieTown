@@ -108,9 +108,9 @@ def _should_stop(detections, current_lane_omega=0.0):
     # Pass-through execution
     flag, reason, v, omega = student_should_stop(detections, det_agent.img_size, current_lane_omega)
 
-    # Capture state change metrics down to the local server profile context
+    # Sync server tracking metrics with state machine declarations
     if reason == "Maneuver Completed":
-        _cooldown_until = time.time() + 2.5
+        _cooldown_until = time.time() + 3.0
 
     return flag, reason, v, omega
 
@@ -164,10 +164,7 @@ def visualize(frame_rgb):
                 right_speed = override_v + (override_omega * 0.1)
                 wheels.set_wheels_speed(left_speed, right_speed)
             elif not should_stop_flag:
-                # Local server-side steering safety rails
-                if current_time < _cooldown_until and pwm_right > 0.25:
-                    pwm_right = 0.20
-
+                # CLEAN HANDOFF: Lane Agent now has 100% full authority to turn and correct path errors
                 wheels.set_wheels_speed(pwm_left, pwm_right)
             else:
                 wheels.set_wheels_speed(0.0, 0.0)
