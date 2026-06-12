@@ -1,0 +1,100 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "truck",
+      "points": [
+        [
+          210.71428571428572,
+          176.42857142857147
+        ],
+        [
+          9.28571428571432,
+          2.142857142857183
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "truck",
+      "points": [
+        [
+          490.7142857142858,
+          44.28571428571432
+        ],
+        [
+          430.0,
+          4.0523140398818214e-14
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          546.4285714285714,
+          42.8571428571429
+        ],
+        [
+          528.5714285714286,
+          24.285714285714324
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          394.2857142857143,
+          9.285714285714324
+        ],
+        [
+          410.0,
+          25.00000000000004
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          517.1428571428571,
+          24.285714285714324
+        ],
+        [
+          502.1428571428571,
+          12.142857142857181
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260507_134815_909810_0097.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

@@ -1,0 +1,28 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "duckie",
+      "points": [
+        [
+          55.00000000000004,
+          81.42857142857146
+        ],
+        [
+          12.857142857142904,
+          36.428571428571466
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260507_134504_369269_0057.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

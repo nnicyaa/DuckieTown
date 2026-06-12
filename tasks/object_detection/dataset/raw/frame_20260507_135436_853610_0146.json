@@ -1,0 +1,28 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "truck",
+      "points": [
+        [
+          170.00000000000006,
+          434.2857142857143
+        ],
+        [
+          638.5714285714286,
+          2.8571428571428976
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260507_135436_853610_0146.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

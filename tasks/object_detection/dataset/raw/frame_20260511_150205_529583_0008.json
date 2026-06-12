@@ -1,0 +1,118 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "sign",
+      "points": [
+        [
+          429.28571428571433,
+          267.14285714285717
+        ],
+        [
+          337.8571428571429,
+          1.4285714285714692
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          499.28571428571433,
+          105.71428571428574
+        ],
+        [
+          483.57142857142856,
+          42.14285714285718
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          445.0,
+          208.5714285714286
+        ],
+        [
+          400.7142857142857,
+          157.8571428571429
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          284.28571428571433,
+          140.71428571428575
+        ],
+        [
+          260.7142857142857,
+          119.2857142857143
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          52.857142857142904,
+          149.2857142857143
+        ],
+        [
+          35.00000000000004,
+          132.14285714285717
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "truck",
+      "points": [
+        [
+          215.71428571428572,
+          200.71428571428575
+        ],
+        [
+          90.00000000000004,
+          80.00000000000003
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260511_150205_529583_0008.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

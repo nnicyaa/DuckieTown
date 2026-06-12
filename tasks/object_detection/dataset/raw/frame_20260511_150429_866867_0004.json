@@ -1,0 +1,118 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "sign",
+      "points": [
+        [
+          177.8571428571429,
+          77.14285714285717
+        ],
+        [
+          260.00000000000006,
+          320.7142857142857
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          334.28571428571433,
+          134.28571428571433
+        ],
+        [
+          351.42857142857144,
+          222.14285714285717
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          413.57142857142856,
+          113.5714285714286
+        ],
+        [
+          443.57142857142856,
+          162.14285714285717
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          134.28571428571433,
+          129.28571428571433
+        ],
+        [
+          167.14285714285717,
+          265.7142857142857
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "truck",
+      "points": [
+        [
+          362.8571428571429,
+          161.42857142857147
+        ],
+        [
+          460.0,
+          264.28571428571433
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "truck",
+      "points": [
+        [
+          62.857142857142904,
+          170.71428571428575
+        ],
+        [
+          142.14285714285717,
+          256.42857142857144
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260511_150429_866867_0004.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

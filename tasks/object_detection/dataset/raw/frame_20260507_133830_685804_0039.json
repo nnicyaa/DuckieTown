@@ -1,0 +1,46 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "truck",
+      "points": [
+        [
+          323.5714285714286,
+          215.71428571428575
+        ],
+        [
+          113.55256954266858,
+          2.842170943040401e-14
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          519.2857142857143,
+          116.42857142857146
+        ],
+        [
+          585.7142857142857,
+          204.2857142857143
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260507_133830_685804_0039.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

@@ -1,0 +1,100 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "sign",
+      "points": [
+        [
+          531.4285714285714,
+          199.2857142857143
+        ],
+        [
+          475.7142857142858,
+          4.0523140398818214e-14
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          119.28571428571432,
+          250.00000000000003
+        ],
+        [
+          55.00000000000004,
+          1.4285714285714692
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          45.71428571428574,
+          25.00000000000004
+        ],
+        [
+          80.71428571428574,
+          137.8571428571429
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          242.8571428571429,
+          162.14285714285717
+        ],
+        [
+          294.28571428571433,
+          227.8571428571429
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          21.428571428571473,
+          118.5714285714286
+        ],
+        [
+          48.5714285714286,
+          155.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260511_150541_273241_0027.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

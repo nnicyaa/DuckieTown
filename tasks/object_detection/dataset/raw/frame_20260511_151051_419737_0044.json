@@ -1,0 +1,190 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "sign",
+      "points": [
+        [
+          214.28571428571433,
+          1.4285714285714692
+        ],
+        [
+          311.42857142857144,
+          299.2857142857143
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          354.28571428571433,
+          67.14285714285717
+        ],
+        [
+          378.5714285714286,
+          175.00000000000003
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          14.28571428571432,
+          85.71428571428574
+        ],
+        [
+          31.42857142857146,
+          145.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          190.00000000000006,
+          94.2857142857143
+        ],
+        [
+          200.00000000000006,
+          131.42857142857147
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "truck",
+      "points": [
+        [
+          460.0,
+          112.14285714285717
+        ],
+        [
+          495.71428571428567,
+          145.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "truck",
+      "points": [
+        [
+          154.28571428571433,
+          107.14285714285717
+        ],
+        [
+          182.14285714285717,
+          135.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          600.0,
+          181.42857142857147
+        ],
+        [
+          630.7142857142857,
+          220.00000000000003
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          7.142857142857181,
+          161.42857142857147
+        ],
+        [
+          33.5714285714286,
+          190.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          90.71428571428574,
+          122.14285714285717
+        ],
+        [
+          99.28571428571432,
+          133.5714285714286
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          323.5714285714286,
+          174.2857142857143
+        ],
+        [
+          307.14285714285717,
+          151.42857142857147
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260511_151051_419737_0044.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

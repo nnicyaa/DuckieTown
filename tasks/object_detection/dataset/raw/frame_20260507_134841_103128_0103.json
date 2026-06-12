@@ -1,0 +1,46 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "duckie",
+      "points": [
+        [
+          343.5714285714286,
+          117.14285714285717
+        ],
+        [
+          430.0,
+          215.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          146.42857142857144,
+          35.000000000000036
+        ],
+        [
+          115.71428571428574,
+          12.857142857142895
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260507_134841_103128_0103.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}

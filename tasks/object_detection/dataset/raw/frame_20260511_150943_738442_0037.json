@@ -1,0 +1,136 @@
+{
+  "version": "6.1.3",
+  "flags": {},
+  "shapes": [
+    {
+      "label": "sign",
+      "points": [
+        [
+          85.71428571428574,
+          95.71428571428574
+        ],
+        [
+          113.5714285714286,
+          190.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          262.14285714285717,
+          40.000000000000036
+        ],
+        [
+          302.14285714285717,
+          244.2857142857143
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          594.2857142857143,
+          92.85714285714289
+        ],
+        [
+          605.0,
+          160.71428571428575
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          330.0,
+          188.5714285714286
+        ],
+        [
+          365.7142857142857,
+          229.2857142857143
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          340.7142857142857,
+          157.14285714285717
+        ],
+        [
+          357.14285714285717,
+          179.2857142857143
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "duckie",
+      "points": [
+        [
+          177.8571428571429,
+          150.71428571428575
+        ],
+        [
+          192.14285714285717,
+          166.42857142857147
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    },
+    {
+      "label": "sign",
+      "points": [
+        [
+          120.00000000000004,
+          104.2857142857143
+        ],
+        [
+          132.14285714285717,
+          167.8571428571429
+        ]
+      ],
+      "group_id": null,
+      "description": "",
+      "shape_type": "rectangle",
+      "flags": {},
+      "mask": null
+    }
+  ],
+  "imagePath": "frame_20260511_150943_738442_0037.jpg",
+  "imageData": null,
+  "imageHeight": 480,
+  "imageWidth": 640
+}
