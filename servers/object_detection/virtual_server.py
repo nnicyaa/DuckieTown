@@ -148,23 +148,39 @@ def visualize(frame_rgb):
                 continue
             clean_detections.append(det)
 
-        # 2. Track normal baseline lane commands
         pwm_left, pwm_right = lane_agent.compute_commands(frame_rgb)
 
-        # 3. Process FSM using our CLEAN list
-        should_stop_flag, reason, override_v, override_omega = _should_stop(clean_detections,
-                                                                            current_lane_omega=pwm_right)
+        should_stop_flag, reason, override_v, override_omega = _should_stop(
+            clean_detections,
+            current_lane_omega=lane_agent.last_steering
+        )
+
         _stopped_by_det = should_stop_flag
         _stop_reason = reason
 
         # 4. Actuator speed transmission
         if running and not wheels.is_game_over():
+            # DYNAMIC CURVE SLOWDOWN MECHANISM
+            # Calculate turning effort from the difference between left/right wheels
+            steering_strain = abs(pwm_left - pwm_right)
+
             if override_v >= 0.0:
+                # 1. Curve Adjustment for Override Pass maneuvers
+                if abs(override_omega) > 0.15:
+                    override_v *= 0.65  # Drop velocity by 35% during heavy curve passes
+
                 left_speed = override_v - (override_omega * 0.1)
                 right_speed = override_v + (override_omega * 0.1)
                 wheels.set_wheels_speed(left_speed, right_speed)
+
             elif not should_stop_flag:
-                # CLEAN HANDOFF: Lane Agent now has 100% full authority to turn and correct path errors
+                # 2. Curve Adjustment for Normal Lane Following
+                if steering_strain > 0.08:
+                    # Scale down velocities linearly relative to steering strain
+                    slowdown_factor = max(0.45, 1.0 - (steering_strain * 1.8))
+                    pwm_left *= slowdown_factor
+                    pwm_right *= slowdown_factor
+
                 wheels.set_wheels_speed(pwm_left, pwm_right)
             else:
                 wheels.set_wheels_speed(0.0, 0.0)
