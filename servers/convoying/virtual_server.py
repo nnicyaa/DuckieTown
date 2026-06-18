@@ -17,6 +17,7 @@ from tasks.object_detection.packages.agent import ObjectDetectionAgent
 from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.convoying.packages.target_tracker_activity import TargetTracker
 from tasks.convoying.packages.convoy_controller_activity import ConvoyController
+from tasks.convoying.packages.red_line_gate import RedLineGate
 
 from servers.convoying.visualization import create_convoying_visualization
 from servers.templates.convoying import CONVOYING_TEMPLATE as HTML_TEMPLATE
@@ -36,6 +37,7 @@ object_agent = None
 lane_agent = None
 tracker = None
 convoy_controller = None
+red_line_gate = None
 
 running = False
 stop_event = threading.Event()
@@ -50,6 +52,7 @@ _last_valid_target = None
 _last_command = None
 _last_lane_left = 0.0
 _last_lane_right = 0.0
+_last_red_line_state = None
 
 
 # ---------------------------------------------------------------------------
@@ -97,21 +100,37 @@ def visualize(frame_rgb):
 
     Pipeline:
         camera frame
+        -> red line gate
         -> push downscaled copy to detection thread
         -> grab latest scaled detections
         -> blue truck fallback if YOLO misses truck
         -> target tracking
-        -> lane servoing
-        -> convoy speed controller
+        -> lane servoing if allowed
+        -> convoy controller
         -> wheel speeds
         -> browser visualization
     """
-    global _last_target, _last_valid_target, _last_command, _last_lane_left, _last_lane_right
+    global _last_target
+    global _last_valid_target
+    global _last_command
+    global _last_lane_left
+    global _last_lane_right
+    global _last_red_line_state
 
     if frame_rgb is None:
         return _placeholder("Waiting for Godot camera...")
 
     image_height, image_width = frame_rgb.shape[:2]
+
+    # Red line detection.
+    # If close red line is detected, lane following is disabled for 5 seconds.
+    if red_line_gate is not None:
+        red_line_state = red_line_gate.update(frame_rgb)
+    else:
+        red_line_state = None
+
+    _last_red_line_state = red_line_state
+    lane_disabled = bool(red_line_state and red_line_state.lane_disabled)
 
     # Feed detection thread — drop frame if it is busy.
     if object_agent is not None and object_agent.model_loaded:
@@ -142,8 +161,10 @@ def visualize(frame_rgb):
     if target.found:
         _last_valid_target = target
 
-    # Lane servoing for steering.
-    if lane_agent is not None:
+    # Lane servoing.
+    # Important: when lane_disabled is True, we DO NOT use lane commands.
+    # The controller will steer only toward the leader truck.
+    if lane_agent is not None and not lane_disabled:
         try:
             lane_left, lane_right = lane_agent.compute_commands(frame_rgb)
         except Exception as e:
@@ -152,11 +173,15 @@ def visualize(frame_rgb):
     else:
         lane_left, lane_right = 0.0, 0.0
 
-    # Convoy controller — distance controls speed, lane servoing controls steering.
+    # Convoy controller.
+    # Normal mode: lane_left/lane_right steer the bot.
+    # Red-line mode: lane_disabled=True, controller ignores lane and follows leader only.
     command = convoy_controller.decide(
         target=target,
         lane_left=lane_left,
         lane_right=lane_right,
+        image_width=image_width,
+        lane_disabled=lane_disabled,
     )
 
     # Drive wheels.
@@ -230,7 +255,12 @@ def stop():
 
 @app.route('/reset', methods=['POST'])
 def reset():
-    global running, _last_detections, _last_target, _last_valid_target, _last_command
+    global running
+    global _last_detections
+    global _last_target
+    global _last_valid_target
+    global _last_command
+    global _last_red_line_state
 
     running = False
 
@@ -241,12 +271,16 @@ def reset():
     if tracker is not None:
         tracker.reset()
 
+    if red_line_gate is not None:
+        red_line_gate.reset()
+
     with _detection_lock:
         _last_detections = []
 
     _last_target = None
     _last_valid_target = None
     _last_command = None
+    _last_red_line_state = None
 
     print("[Convoying] Reset")
     return jsonify({'status': 'reset'})
@@ -272,6 +306,7 @@ def status():
         'command': _command_to_dict(_last_command),
         'lane_left': _last_lane_left,
         'lane_right': _last_lane_right,
+        'red_line': _red_line_to_dict(_last_red_line_state),
     })
 
 
@@ -290,11 +325,19 @@ def update_config():
         if 'max_speed' in data:
             convoy_controller.max_speed = float(data['max_speed'])
 
+        # Optional leader-only tuning from browser/API.
+        if 'leader_steering_gain' in data:
+            convoy_controller.leader_steering_gain = float(data['leader_steering_gain'])
+        if 'leader_steering_sign' in data:
+            convoy_controller.leader_steering_sign = float(data['leader_steering_sign'])
+
     return jsonify({
         'close_multiplier': convoy_controller.close_multiplier if convoy_controller else None,
         'good_multiplier': convoy_controller.good_multiplier if convoy_controller else None,
         'far_multiplier': convoy_controller.far_multiplier if convoy_controller else None,
         'max_speed': convoy_controller.max_speed if convoy_controller else None,
+        'leader_steering_gain': convoy_controller.leader_steering_gain if convoy_controller else None,
+        'leader_steering_sign': convoy_controller.leader_steering_sign if convoy_controller else None,
     })
 
 
@@ -504,6 +547,19 @@ def _command_to_dict(command):
     }
 
 
+def _red_line_to_dict(red_line_state):
+    if red_line_state is None:
+        return None
+
+    return {
+        'red_line_close': red_line_state.red_line_close,
+        'lane_disabled': red_line_state.lane_disabled,
+        'disabled_remaining': red_line_state.disabled_remaining,
+        'red_ratio': red_line_state.red_ratio,
+        'red_row_ratio': red_line_state.red_row_ratio,
+    }
+
+
 def _placeholder(text):
     canvas = np.zeros((240, 640, 3), dtype='uint8')
     cv2.putText(
@@ -523,7 +579,13 @@ def _placeholder(text):
 # ---------------------------------------------------------------------------
 
 def main():
-    global camera, wheels, object_agent, lane_agent, tracker, convoy_controller
+    global camera
+    global wheels
+    global object_agent
+    global lane_agent
+    global tracker
+    global convoy_controller
+    global red_line_gate
 
     ap = argparse.ArgumentParser(description="Virtual Convoying Server")
     ap.add_argument("--port", type=int, default=5000)
@@ -570,10 +632,14 @@ def main():
     lane_agent = LaneServoingAgent()
     print(f"  base_speed={lane_agent.base_speed}")
 
-    print("\n[5/5] Creating convoying tracker and controller...")
+    print("\n[5/5] Creating convoying tracker, controller, and red-line gate...")
     tracker = TargetTracker()
     convoy_controller = ConvoyController()
-    print("  Tracker and controller ready")
+    red_line_gate = RedLineGate(disable_seconds=5.0)
+
+    print("  Tracker ready")
+    print("  Controller ready")
+    print("  Red-line gate ready: lane disabled for 5 seconds after close red line")
 
     threading.Thread(target=_detection_loop, daemon=True).start()
 

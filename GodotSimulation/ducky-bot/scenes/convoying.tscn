@@ -25,7 +25,7 @@ size = Vector3(2.0014038, 0.01751709, 1.9967651)
 [node name="convoying" type="Node3D" unique_id=1690158760]
 
 [node name="DuckieBot" parent="." unique_id=865415826 instance=ExtResource("1_h126k")]
-transform = Transform3D(-0.99948883, 0, -0.03196899, 0, 1, 0, 0.03196899, 0, -0.99948883, 4.154852, 0.044506483, 3.3970077)
+transform = Transform3D(-0.99948883, 0, -0.03196899, 0, 1, 0, 0.03196899, 0, -0.99948883, 4.154852, 0.044506483, 1.8970077)
 WheelPort = 5011
 CameraPort = 5011
 
@@ -57,11 +57,10 @@ shape = SubResource("BoxShape3D_7gp57")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.2620525, 0.010445523, 4.8696938)
 
 [node name="LeadTruck" parent="." instance=ExtResource("6_lead")]
-transform = Transform3D(-0.99948883, 0, -0.03196899, 0, 1, 0, 0.03196899, 0, -0.99948883, 4.17, 0.08, 4.05)
+transform = Transform3D(-0.99948883, 0, -0.03196899, 0, 1, 0, 0.03196899, 0, -0.99948883, 4.17, 0.08, 2.55)
 script = ExtResource("7_lead_script")
-speed = 0.025
-reach_distance = 0.08
-loop_path = true
+speed = 0.04
+reach_distance = 0.05
 rotation_offset_degrees = 180.0
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1342242373]

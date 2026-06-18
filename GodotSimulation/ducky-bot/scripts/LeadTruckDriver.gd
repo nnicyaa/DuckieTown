@@ -1,6 +1,6 @@
 extends Node3D
 
-@export var speed: float = 0.025
+@export var speed: float = 0.16
 @export var reach_distance: float = 0.05
 @export var rotation_offset_degrees: float = 180.0
 
@@ -10,20 +10,33 @@ var _finished: bool = false
 
 
 func _ready() -> void:
-	# Safe straight same-lane path.
-	# Lead truck moves forward and then stops.
-	# It does NOT loop back.
+	# Lead truck starts close enough to follower.
+	# It goes straight a bit longer, turns left smoothly,
+	# then continues straight after the turn.
+
 	_points = [
-	Vector3(4.17, 0.08, 4.05),
-	Vector3(4.17, 0.08, 4.35),
-	Vector3(4.17, 0.08, 4.65),
-	Vector3(4.17, 0.08, 4.95),
-	Vector3(4.18, 0.08, 5.15),
-	Vector3(4.25, 0.08, 5.30),
-	Vector3(4.35, 0.08, 5.42),
-	Vector3(4.48, 0.08, 5.50),
-	Vector3(4.62, 0.08, 5.55),
-	Vector3(4.78, 0.08, 5.56),
+	# straight before crossroad
+	Vector3(4.17, 0.08, 2.30),
+	Vector3(4.17, 0.08, 2.45),
+	Vector3(4.17, 0.08, 2.60),
+	Vector3(4.17, 0.08, 2.72),
+
+	# smooth left turn starts earlier here
+	Vector3(4.22, 0.08, 2.84),
+	Vector3(4.30, 0.08, 2.94),
+	Vector3(4.42, 0.08, 3.02),
+	Vector3(4.58, 0.08, 3.08),
+	Vector3(4.76, 0.08, 3.12),
+	Vector3(4.96, 0.08, 3.14),
+	Vector3(5.15, 0.08, 3.15),
+
+	# after turn: keep going straight in the new lane
+	Vector3(5.35, 0.08, 3.15),
+	Vector3(5.60, 0.08, 3.15),
+	Vector3(5.85, 0.08, 3.15),
+	Vector3(6.10, 0.08, 3.15),
+	Vector3(6.35, 0.08, 3.15),
+	Vector3(6.60, 0.08, 3.15),
 ]
 
 	global_position = _points[0]
@@ -60,6 +73,7 @@ func _physics_process(delta: float) -> void:
 		return
 
 	var direction := to_target.normalized()
+
 	global_position += direction * speed * delta
 
 	look_at(global_position + direction, Vector3.UP)

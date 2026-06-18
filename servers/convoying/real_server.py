@@ -150,6 +150,7 @@ def visualize(frame_bgr):
             target=target,
             lane_left=lane_left,
             lane_right=lane_right,
+            image_width=image_width,
         )
     else:
         command = _last_command
