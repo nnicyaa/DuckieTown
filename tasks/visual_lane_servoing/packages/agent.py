@@ -53,8 +53,14 @@ class LaneServoingAgent:
         except Exception:
             cfg = {}
 
-        self.p_gain              = cfg.get('p_gain',              0.1)
-        self.d_gain              = cfg.get('d_gain',              0.35)
+        # NOTE on gains: the previous defaults (p_gain=0.1, d_gain=0.35) made
+        # the derivative term ~3.5x stronger than proportional. On a noisy
+        # lane-mask error signal (lighting changes, partial dropouts), a
+        # dominant D-term reacts hard to frame-to-frame noise and produces
+        # left-right-left-right ringing. Rebalanced so P leads and D only
+        # lightly damps overshoot.
+        self.p_gain              = cfg.get('p_gain',              0.18)
+        self.d_gain              = cfg.get('d_gain',              0.12)
         self.max_steer           = cfg.get('max_steer',           0.4)
         self.base_speed          = cfg.get('base_speed',          0.2)
         self.curve_speed         = cfg.get('curve_speed',         0.2)
@@ -100,16 +106,24 @@ class LaneServoingAgent:
             return 0.0, 0.0
 
         speed = self.curve_speed if is_curve else self.base_speed
-        
+
         if not both_visible:
             speed *= 0.8
 
         left  = speed - steering
         right = speed + steering
 
+        # FIX: previously this was asymmetric -- right turns got `right *= 5`
+        # (an oversized multiplier that pinned right speed to its clipped max
+        # almost every time) while left turns got the much gentler
+        # `left *= curve_boost` (1.3x). That mismatch caused hard, near-max
+        # corrections on one side and weak ones on the other, producing
+        # overshoot -> sign flip -> overshoot the other way (the
+        # left-right-left-right pattern). Both directions now use the same
+        # curve_boost multiplier so curves are handled symmetrically.
         if is_curve and abs(steering) > self.steering_threshold:
             if steering > 0:
-                right *= 5
+                right *= self.curve_boost
             else:
                 left  *= self.curve_boost
 

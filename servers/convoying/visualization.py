@@ -10,6 +10,7 @@ def create_convoying_visualization(
     lane_left: float,
     lane_right: float,
     detections,
+    red_line_state =None,
 ) -> np.ndarray:
     display_w = 360
     h, w = image_bgr.shape[:2]
@@ -27,6 +28,7 @@ def create_convoying_visualization(
         command=command,
         lane_left=lane_left,
         lane_right=lane_right,
+        red_line_state=red_line_state,
     )
 
     top = np.hstack([camera_panel, lane_panel])
@@ -135,7 +137,7 @@ def _make_lane_panel(lane_debug_info, display_w, display_h):
     return lane_panel
 
 
-def _make_info_panel(width, target, command, lane_left, lane_right):
+def _make_info_panel(width, target, command, lane_left, lane_right,  red_line_state=None):
     height = 150
     panel = np.zeros((height, width, 3), dtype=np.uint8)
     font = cv2.FONT_HERSHEY_SIMPLEX

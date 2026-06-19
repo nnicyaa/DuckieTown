@@ -18,7 +18,7 @@ from tasks.object_detection.packages.agent import ObjectDetectionAgent
 from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.convoying.packages.target_tracker_activity import TargetTracker
 from tasks.convoying.packages.convoy_controller_activity import ConvoyController
-
+from tasks.convoying.packages.red_line_stop import RedLineGate
 from servers.convoying.visualization import create_convoying_visualization
 from servers.templates.convoying import CONVOYING_TEMPLATE as HTML_TEMPLATE
 
@@ -31,12 +31,13 @@ from servers.common import make_frame_generator, shutdown_cleanup, suppress_http
 
 app = Flask(__name__)
 
-camera          = None
-wheels          = None
-object_agent    = None
-lane_agent      = None
-tracker         = None
-convoy_ctrl     = None
+camera = None
+wheels = None
+object_agent = None
+lane_agent = None
+tracker = None
+convoy_ctrl = None
+red_line_gate = None
 
 running         = False
 stop_event      = threading.Event()
@@ -48,13 +49,15 @@ _last_target     = None
 _last_command    = None
 _last_lane_left  = 0.0
 _last_lane_right = 0.0
+# FIX: this was read via `global` inside visualize() and status() but never
+# initialized here, which raised NameError on first use (e.g. hitting
+# /status before any frame had been processed).
+_last_red_line_state = None
 
 
-# ---------------------------------------------------------------------------
 # Background detection thread
 # Runs object detection independently from the video-stream loop so that
 # slow inference doesn't drop frames.
-# ---------------------------------------------------------------------------
 
 def _detection_loop():
     global _last_detections
@@ -75,9 +78,7 @@ def _detection_loop():
                 _last_detections = result
 
 
-# ---------------------------------------------------------------------------
 # Frame pipeline (called for every MJPEG frame)
-# ---------------------------------------------------------------------------
 
 def visualize(frame_bgr):
     """
@@ -87,18 +88,36 @@ def visualize(frame_bgr):
         camera frame
         -> object detection (async thread)
         -> target tracking
-        -> lane servoing
-        -> convoy speed controller
+        -> red-line gate (intersection window timing)
+        -> lane servoing (always computed, even during the red-line window)
+        -> convoy controller decides steering source:
+             normal:                lane steering, leader-distance speed
+             red-line + straight:   leader-only steering
+             red-line + turning:    lane steering (smooth turn), leader-distance speed
         -> wheel speeds
         -> browser visualization
     """
-    global _last_target, _last_command, _last_lane_left, _last_lane_right
+    global _last_target, _last_command, _last_lane_left, _last_lane_right, _last_red_line_state
 
     if frame_bgr is None:
         return frame_bgr
 
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
     image_height, image_width = frame_bgr.shape[:2]
+
+    if red_line_gate is not None:
+        red_line_state = red_line_gate.update(frame_rgb)
+        # FIX: previously `_last_red_line_state = None` was set right here,
+        # immediately discarding the value we just computed before it could
+        # be used anywhere (status endpoint, visualization panel). The real
+        # assignment now happens once, at the bottom, alongside the other
+        # _last_* globals.
+    else:
+        red_line_state = None
+
+    lane_disabled = bool(
+        red_line_state and red_line_state.lane_disabled
+    )
 
     # Feed a downscaled copy to the detection thread (non-blocking).
     if object_agent is not None and object_agent.model_loaded:
@@ -135,6 +154,14 @@ def visualize(frame_bgr):
         target = _last_target
 
     # Lane servoing for steering.
+    # FIX: previously this was skipped (forced to 0.0, 0.0) whenever
+    # lane_disabled was True. That broke the leader-turn fallback in
+    # ConvoyController: if the leader turns during the red-line window, the
+    # controller now wants to steer using lane_left/lane_right, but they'd
+    # have been zeroed out here -- meaning the robot would just drive
+    # straight with zero steering instead of turning. Lane servoing now
+    # always runs; ConvoyController.decide() is responsible for choosing
+    # whether to actually use these values this frame.
     if lane_agent is not None:
         try:
             lane_left, lane_right = lane_agent.compute_commands(frame_rgb)
@@ -144,13 +171,15 @@ def visualize(frame_bgr):
     else:
         lane_left, lane_right = 0.0, 0.0
 
-    # Convoy controller combines distance state with lane speeds.
+    # Convoy controller combines distance state, leader position, and lane
+    # speeds into the final command.
     if convoy_ctrl is not None and target is not None:
         command = convoy_ctrl.decide(
             target=target,
             lane_left=lane_left,
             lane_right=lane_right,
             image_width=image_width,
+            lane_disabled=lane_disabled,
         )
     else:
         command = _last_command
@@ -162,10 +191,11 @@ def visualize(frame_bgr):
         else:
             wheels.set_wheels_speed(0.0, 0.0)
 
-    _last_target    = target
-    _last_command   = command
-    _last_lane_left  = lane_left
-    _last_lane_right = lane_right
+    _last_target          = target
+    _last_command         = command
+    _last_lane_left        = lane_left
+    _last_lane_right       = lane_right
+    _last_red_line_state   = red_line_state
 
     return create_convoying_visualization(
         image_bgr=frame_bgr,
@@ -175,16 +205,27 @@ def visualize(frame_bgr):
         lane_left=lane_left,
         lane_right=lane_right,
         detections=scaled_detections,
+        red_line_state=red_line_state,
     )
 
 
 # Real camera returns BGR frames — rgb=False.
 generate_frames = make_frame_generator(lambda: camera, visualize, quality=50, rgb=False)
 
+def _red_line_to_dict(red_line_state):
+    if red_line_state is None:
+        return None
 
-# ---------------------------------------------------------------------------
+    return {
+        'red_line_close': red_line_state.red_line_close,
+        'lane_disabled': red_line_state.lane_disabled,
+        'disabled_remaining': red_line_state.disabled_remaining,
+        'mode': red_line_state.mode,
+        'red_ratio': red_line_state.red_ratio,
+        'red_row_ratio': red_line_state.red_row_ratio,
+    }
+
 # Flask routes
-# ---------------------------------------------------------------------------
 
 @app.route('/')
 def index():
@@ -245,6 +286,7 @@ def status():
         'command':           _command_to_dict(_last_command),
         'lane_left':         _last_lane_left,
         'lane_right':        _last_lane_right,
+        'red_line': _red_line_to_dict(_last_red_line_state),
     })
 
 
@@ -268,11 +310,7 @@ def update_config():
         'max_speed':        convoy_ctrl.max_speed        if convoy_ctrl else None,
     })
 
-
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
-
 def _target_to_dict(target):
     if target is None:
         return None
@@ -301,11 +339,7 @@ def _command_to_dict(command):
         'reason':           command.reason,
     }
 
-
-# ---------------------------------------------------------------------------
 # Entry point
-# ---------------------------------------------------------------------------
-
 def main():
     global camera, wheels, object_agent, lane_agent, tracker, convoy_ctrl
 
@@ -333,7 +367,7 @@ def main():
         print("[Init] Camera ready")
 
     def _init_agents():
-        global object_agent, lane_agent, tracker, convoy_ctrl
+        global object_agent, lane_agent, tracker, convoy_ctrl, red_line_gate
         lane_agent  = LaneServoingAgent()
         print(f"[Init] Lane agent ready (base_speed={lane_agent.base_speed})")
         object_agent = ObjectDetectionAgent()
@@ -343,6 +377,7 @@ def main():
             print(f"[Init] Detection model: {object_agent.load_error}")
         tracker     = TargetTracker()
         convoy_ctrl = ConvoyController()
+        red_line_gate = RedLineGate(disable_seconds=7.0)
         print("[Init] Convoy tracker and controller ready")
 
     threading.Thread(target=_init_wheels,    daemon=True).start()

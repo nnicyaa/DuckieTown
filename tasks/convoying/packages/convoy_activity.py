@@ -20,8 +20,10 @@ class ConvoyController:
         leader distance controls speed
 
     Red-line / crossroad mode:
-        lane following is disabled
-        robot follows only the leader truck for steering
+        if the leader is going straight  -> follow only the leader truck for steering
+        if the leader is turning         -> use lane following to execute the turn smoothly
+        (lane following is only consulted for steering during a turn; the rest
+        of the time in this mode the leader's bbox position controls steering)
     """
 
     def __init__(
@@ -37,6 +39,17 @@ class ConvoyController:
         leader_steering_gain: float = 1.25,
         leader_max_steer_ratio: float = 0.95,
         leader_steering_sign: float = 1.0,
+
+        # Leader-turn detection settings (used only while lane_disabled=True).
+        # The leader's center-x error is smoothed (EMA) to avoid noise causing
+        # false turn detections. Hysteresis (different enter/exit thresholds
+        # plus frame counts) prevents flapping between leader-only and
+        # lane-following steering near the threshold.
+        turn_error_enter_threshold: float = 0.22,
+        turn_error_exit_threshold: float = 0.10,
+        turn_enter_frames: int = 3,
+        turn_exit_frames: int = 5,
+        turn_error_smoothing: float = 0.4,
     ):
         self.close_multiplier = close_multiplier
         self.good_multiplier = good_multiplier
@@ -50,9 +63,21 @@ class ConvoyController:
         self.leader_max_steer_ratio = leader_max_steer_ratio
         self.leader_steering_sign = leader_steering_sign
 
+        self.turn_error_enter_threshold = turn_error_enter_threshold
+        self.turn_error_exit_threshold = turn_error_exit_threshold
+        self.turn_enter_frames = turn_enter_frames
+        self.turn_exit_frames = turn_exit_frames
+        self.turn_error_smoothing = turn_error_smoothing
+
         self._had_target = False
         self._lost_frames = 0
         self._last_distance_state = LOST
+
+        # Leader-turn detection state.
+        self._smoothed_error: Optional[float] = None
+        self._leader_is_turning = False
+        self._above_threshold_frames = 0
+        self._below_threshold_frames = 0
 
     def decide(
         self,
@@ -68,15 +93,33 @@ class ConvoyController:
             self._last_distance_state = target.distance_state
 
             if target.distance_state == TOO_CLOSE:
+                self._reset_turn_state()
                 return self._stop("target_too_close_stop")
 
-            # Main red-line / crossroad fix:
-            # When lane following is disabled, ignore lane_left/lane_right completely.
             if lane_disabled:
+                leader_is_turning = self._update_turn_detection(
+                    target=target,
+                    image_width=image_width,
+                )
+
+                if leader_is_turning:
+                    # Leader is turning: use lane following to make the turn
+                    # smooth instead of chasing the leader's swinging bbox.
+                    return self._scale_for_distance(
+                        target=target,
+                        lane_left=lane_left,
+                        lane_right=lane_right,
+                        reason_suffix="red_line_leader_turning_lane_following",
+                    )
+
                 return self._leader_only_command(
                     target=target,
                     image_width=image_width,
                 )
+
+            # Not in red-line mode -- reset turn state so we start clean
+            # the next time we enter a red-line window.
+            self._reset_turn_state()
 
             # Normal lane-following behavior.
             if target.distance_state == CLOSE:
@@ -110,7 +153,10 @@ class ConvoyController:
         # If lane is disabled because of red line, do NOT continue lane following.
         # If leader is lost at crossroad, stop.
         if lane_disabled:
+            self._reset_turn_state()
             return self._stop("lane_disabled_target_lost_stop")
+
+        self._reset_turn_state()
 
         if self._last_distance_state == TOO_CLOSE:
             return self._stop("target_lost_after_too_close_emergency_stop")
@@ -135,6 +181,80 @@ class ConvoyController:
             )
 
         return self._stop("target_lost_stop")
+
+    def _update_turn_detection(
+        self,
+        target: TargetInfo,
+        image_width: Optional[int],
+    ) -> bool:
+        """
+        Tracks whether the leader appears to be turning, using a smoothed
+        center-x error with hysteresis so the decision doesn't flicker.
+
+        Returns True if we should use lane following this frame, False if
+        we should use leader-only steering this frame.
+        """
+        if image_width is None or image_width <= 0 or target.center_x is None:
+            # No usable signal this frame -- keep previous decision rather
+            # than guessing.
+            return self._leader_is_turning
+
+        raw_error = self._target_center_error(target, image_width)
+
+        if self._smoothed_error is None:
+            self._smoothed_error = raw_error
+        else:
+            alpha = self.turn_error_smoothing
+            self._smoothed_error = (alpha * raw_error) + (1.0 - alpha) * self._smoothed_error
+
+        magnitude = abs(self._smoothed_error)
+
+        if not self._leader_is_turning:
+            if magnitude >= self.turn_error_enter_threshold:
+                self._above_threshold_frames += 1
+                self._below_threshold_frames = 0
+            else:
+                self._above_threshold_frames = 0
+
+            if self._above_threshold_frames >= self.turn_enter_frames:
+                self._leader_is_turning = True
+                self._above_threshold_frames = 0
+        else:
+            if magnitude <= self.turn_error_exit_threshold:
+                self._below_threshold_frames += 1
+                self._above_threshold_frames = 0
+            else:
+                self._below_threshold_frames = 0
+
+            if self._below_threshold_frames >= self.turn_exit_frames:
+                self._leader_is_turning = False
+                self._below_threshold_frames = 0
+
+        return self._leader_is_turning
+
+    def _reset_turn_state(self) -> None:
+        self._smoothed_error = None
+        self._leader_is_turning = False
+        self._above_threshold_frames = 0
+        self._below_threshold_frames = 0
+
+    def _scale_for_distance(
+        self,
+        target: TargetInfo,
+        lane_left: float,
+        lane_right: float,
+        reason_suffix: str,
+    ) -> ConvoyCommand:
+        if target.distance_state == CLOSE:
+            multiplier = self.close_multiplier
+        elif target.distance_state == GOOD:
+            multiplier = self.good_multiplier
+        elif target.distance_state == FAR:
+            multiplier = self.far_multiplier
+        else:
+            return self._stop("red_line_turn_invalid_distance_state")
+
+        return self._scale(lane_left, lane_right, multiplier, reason_suffix)
 
     def _leader_only_command(
         self,

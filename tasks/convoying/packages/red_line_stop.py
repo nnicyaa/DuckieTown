@@ -12,6 +12,10 @@ class RedLineState:
     disabled_remaining: float
     red_ratio: float
     red_row_ratio: float
+    mode: str
+    # NORMAL
+    # RED_LINE_DETECTED
+    # FOLLOW_LEADER_ONLY
 
 
 class RedLineGate:
@@ -19,12 +23,14 @@ class RedLineGate:
     Detects a close red line on the road.
 
     When a close red line is detected, lane following is disabled for N seconds.
-    During that time, convoy controller should follow only the leader truck.
+    During that time, convoy controller should follow only the leader truck
+    (unless the leader is turning -- that decision is made downstream by
+    ConvoyController, this class only tracks the red-line timing window).
     """
 
     def __init__(
         self,
-        disable_seconds: float = 5.0,
+        disable_seconds: float = 7.0,
         roi_y_start: float = 0.62,
         roi_y_end: float = 0.95,
         min_red_ratio: float = 0.015,
@@ -43,6 +49,7 @@ class RedLineGate:
             disabled_remaining=0.0,
             red_ratio=0.0,
             red_row_ratio=0.0,
+            mode="NORMAL",
         )
 
     def update(self, frame_rgb: np.ndarray) -> RedLineState:
@@ -53,8 +60,16 @@ class RedLineGate:
         if red_line_close:
             self._disabled_until = now + self.disable_seconds
 
+        # Compute remaining/lane_disabled BEFORE deciding mode -- mode depends on it.
         remaining = max(0.0, self._disabled_until - now)
         lane_disabled = remaining > 0.0
+
+        if red_line_close:
+            mode = "RED_LINE_DETECTED"
+        elif lane_disabled:
+            mode = "FOLLOW_LEADER_ONLY"
+        else:
+            mode = "NORMAL"
 
         self.last_state = RedLineState(
             red_line_close=red_line_close,
@@ -62,6 +77,7 @@ class RedLineGate:
             disabled_remaining=remaining,
             red_ratio=red_ratio,
             red_row_ratio=red_row_ratio,
+            mode=mode,
         )
 
         return self.last_state
@@ -74,6 +90,7 @@ class RedLineGate:
             disabled_remaining=0.0,
             red_ratio=0.0,
             red_row_ratio=0.0,
+            mode="NORMAL",
         )
 
     def _detect_close_red_line(self, frame_rgb: np.ndarray):
