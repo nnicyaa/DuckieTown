@@ -42,7 +42,7 @@ def should_stop(detections: List[Detection], img_size: int, current_lane_omega: 
     if _state == INITIATE_PASS:
         print("STATE = INITIATE_PASS")
         elapsed = current_time - _state_start_time
-        if elapsed < 1.00:  # Slightly extended time to compensate for lower speed
+        if elapsed < 1.20:  # Slightly extended time to compensate for lower speed
             return True, "Overtake Step 1: Swerving Left", 0.10, 0.40
         else:
             _state = ALIGN_LEFT
@@ -69,7 +69,7 @@ def should_stop(detections: List[Detection], img_size: int, current_lane_omega: 
         target_v = 0.06 if is_turning_heavily else 0.09
 
         # Follow road curvature while overtaking
-        adaptive_omega = 0.0
+        adaptive_omega = current_lane_omega
 
         if obstacle_visible:
             _clear_frames = 0
@@ -81,7 +81,7 @@ def should_stop(detections: List[Detection], img_size: int, current_lane_omega: 
 
         _clear_frames += 1
 
-        if _clear_frames < 15:
+        if _clear_frames < 5:
             return True, \
                 "Verifying clearance", \
                 target_v, \
@@ -131,12 +131,12 @@ def should_stop(detections: List[Detection], img_size: int, current_lane_omega: 
             continue
 
         # ZONE 1: Detection Confirmation (Duckie is seen ahead)
-        if area > img_size * img_size * 0.008 or ymax > img_size * 0.48:
+        if area > img_size * img_size * 0.012 or ymax > img_size * 0.55:
             obstacle_found = True
 
             # ZONE 2: Proximity Gate (Only true when duckie is close to our bumper)
             # Increase this multiplier (e.g., 0.68 -> 0.72) to make the bot get even closer before turning
-            if ymax > img_size * 0.68 or area > (img_size * img_size * 0.045):
+            if ymax > img_size * 0.62 or area > (img_size * img_size * 0.045):
                 is_close_enough_to_pass = True
             break
 
