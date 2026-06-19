@@ -16,6 +16,49 @@ _LINE_OFFSET = 160
 _ROI_START   = 0.47
 _NUM_SLICES  = 3
 _SLICE_TOL   = 5
+_MAX_MARKER_RUN_RATIO = 0.22
+_MIN_MARKER_COLUMN_PIXELS = 1
+
+
+def _marker_center_from_strip(strip: np.ndarray, side: str, image_width: int):
+    col_counts = np.count_nonzero(strip > 0, axis=0)
+    cols = np.where(col_counts >= _MIN_MARKER_COLUMN_PIXELS)[0]
+    if len(cols) == 0:
+        return None, False
+
+    splits = np.where(np.diff(cols) > 1)[0] + 1
+    runs = np.split(cols, splits)
+    max_run_width = max(8, int(image_width * _MAX_MARKER_RUN_RATIO))
+
+    candidates = []
+    wide_rejected = False
+    for run in runs:
+        if len(run) == 0:
+            continue
+
+        x0, x1 = int(run[0]), int(run[-1])
+        width = x1 - x0 + 1
+        pixels = int(col_counts[run].sum())
+
+        # Intersections create broad horizontal bands across a slice. Those
+        # should not be averaged as if they were a lane boundary.
+        if width > max_run_width:
+            wide_rejected = True
+            continue
+
+        center = float(np.average(run, weights=col_counts[run]))
+        if side == "yellow" and center > image_width * 0.70:
+            continue
+        if side == "white" and center < image_width * 0.30:
+            continue
+
+        candidates.append((pixels, center))
+
+    if not candidates:
+        return None, wide_rejected
+
+    candidates.sort(reverse=True)
+    return int(candidates[0][1]), wide_rejected
 
 
 def detect_lines_in_slices(
@@ -26,21 +69,26 @@ def detect_lines_in_slices(
     slice_height = int(h * 0.35 / _NUM_SLICES)
     start_y      = int(h * _ROI_START)
     yellow_xs, white_xs = [], []
+    intersection_votes = 0
 
     for i in range(_NUM_SLICES):
         y = start_y + i * slice_height + slice_height // 2
 
         strip_y = mask_yellow[y - _SLICE_TOL: y + _SLICE_TOL, :]
-        idx = np.where(strip_y > 0)[1]
-        if len(idx) > 0:
-            yellow_xs.append(int(np.mean(idx)))
+        x, wide = _marker_center_from_strip(strip_y, "yellow", mask_yellow.shape[1])
+        if x is not None:
+            yellow_xs.append(x)
+        if wide:
+            intersection_votes += 1
 
         strip_w = mask_white[y - _SLICE_TOL: y + _SLICE_TOL, :]
-        idx = np.where(strip_w > 0)[1]
-        if len(idx) > 0:
-            white_xs.append(int(np.mean(idx)))
+        x, wide = _marker_center_from_strip(strip_w, "white", mask_white.shape[1])
+        if x is not None:
+            white_xs.append(x)
+        if wide:
+            intersection_votes += 1
 
-    return yellow_xs, white_xs
+    return yellow_xs, white_xs, intersection_votes >= 1
 
 
 class LaneServoingAgent:
@@ -69,6 +117,7 @@ class LaneServoingAgent:
         self._lane_half_width   = float(_LINE_OFFSET)
         self._left_history      = deque(maxlen=3)
         self._right_history     = deque(maxlen=3)
+        self._intersection_hold = 0
         self.last_debug_info    = self._empty_debug_info(480, 640)
 
     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
@@ -158,11 +207,21 @@ class LaneServoingAgent:
         right_det = white_pixels  > 0
         recovery  = total_pixels  < self.detection_threshold
 
-        yellow_xs, white_xs = detect_lines_in_slices(mask_y, mask_w, h)
+        yellow_xs, white_xs, intersection_like = detect_lines_in_slices(mask_y, mask_w, h)
+        if intersection_like:
+            self._intersection_hold = 18
+        elif self._intersection_hold > 0:
+            self._intersection_hold -= 1
+
+        intersection_active = self._intersection_hold > 0
         both_visible        = left_det and right_det and not recovery
         is_curve, curve_dir = detect_curve(yellow_xs, white_xs, self.curve_threshold)
+        if intersection_active:
+            is_curve, curve_dir = False, 0
 
         raw_error            = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
+        if intersection_active:
+            raw_error = self._prev_error
         self._filtered_error = 0.7 * self._filtered_error + 0.3 * raw_error
         steering             = self._calculate_steering(self._filtered_error)
         left, right          = self._motor_commands(steering, recovery, is_curve, both_visible)
@@ -176,6 +235,8 @@ class LaneServoingAgent:
             'slice_ys':  [start_y + i * slice_height + slice_height // 2 for i in range(_NUM_SLICES)],
             'is_curve':  is_curve,
             'curve_dir': curve_dir,
+            'intersection_like': intersection_active,
+            'intersection_raw': intersection_like,
         })
 
         return left, right

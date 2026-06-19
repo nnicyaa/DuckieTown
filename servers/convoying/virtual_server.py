@@ -4,6 +4,7 @@ import threading
 import queue
 import socket
 import argparse
+import time
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(script_dir, '..', '..')
@@ -53,6 +54,7 @@ _last_command = None
 _last_lane_left = 0.0
 _last_lane_right = 0.0
 _last_red_line_state = None
+_lane_disabled_until = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +118,7 @@ def visualize(frame_rgb):
     global _last_lane_left
     global _last_lane_right
     global _last_red_line_state
+    global _lane_disabled_until
 
     if frame_rgb is None:
         return _placeholder("Waiting for Godot camera...")
@@ -171,6 +174,17 @@ def visualize(frame_rgb):
             print(f"[Convoying] Lane error: {e}")
             lane_left, lane_right = 0.0, 0.0
     else:
+        lane_left, lane_right = 0.0, 0.0
+
+    intersection_seen = bool(
+        lane_agent is not None
+        and lane_agent.last_debug_info.get('intersection_like', False)
+    )
+    if intersection_seen:
+        _lane_disabled_until = time.time() + 1.2
+
+    lane_disabled = lane_disabled or time.time() < _lane_disabled_until
+    if lane_disabled:
         lane_left, lane_right = 0.0, 0.0
 
     # Convoy controller.
@@ -433,8 +447,13 @@ def _add_blue_truck_fallback(frame_rgb, detections, last_target=None):
         else:
             dist = 0.0
 
-        # Prefer lower/larger target. Previous target consistency helps but should not dominate.
+        # Prefer lower/larger target once tracking has started. On the initial
+        # frame, reject low edge blobs by preferring targets nearer lane center.
         score = area + bottom_y * 80.0
+        if previous_center is None:
+            center_penalty = abs(center_x - w * 0.5) * 140.0
+            too_low_penalty = max(0.0, bottom_y - h * 0.62) * 220.0
+            score -= center_penalty + too_low_penalty
         if previous_center is not None:
             score -= dist * 60.0
 

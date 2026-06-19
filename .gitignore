@@ -55,7 +55,7 @@ htmlcov/
 **/.godot/
 
 # Dataset
-tasks/object_detection/dataset/*
+# tasks/object_detection/dataset/*
 
-# Model artifacts
-tasks/object_detection/models/*
+# # Model artifacts
+# tasks/object_detection/models/*

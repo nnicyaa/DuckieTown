@@ -11,6 +11,7 @@ project_root = os.path.join(script_dir, '..', '..')
 sys.path.insert(0, project_root)
 
 import cv2
+import numpy as np
 from dataclasses import replace
 from flask import Flask, Response, render_template_string, jsonify, request
 
@@ -45,9 +46,12 @@ _frame_queue    = queue.Queue(maxsize=1)
 _detection_lock = threading.Lock()
 _last_detections = []
 _last_target     = None
+_last_valid_target = None
 _last_command    = None
 _last_lane_left  = 0.0
 _last_lane_right = 0.0
+_last_lane_disabled = False
+_lane_disabled_until = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +96,8 @@ def visualize(frame_bgr):
         -> wheel speeds
         -> browser visualization
     """
-    global _last_target, _last_command, _last_lane_left, _last_lane_right
+    global _last_target, _last_valid_target, _last_command
+    global _last_lane_left, _last_lane_right, _last_lane_disabled, _lane_disabled_until
 
     if frame_bgr is None:
         return frame_bgr
@@ -124,6 +129,12 @@ def visualize(frame_bgr):
     else:
         scaled_detections = detections
 
+    scaled_detections = _add_blue_target_fallback(
+        frame_rgb=frame_rgb,
+        detections=scaled_detections,
+        last_target=_last_valid_target,
+    )
+
     # Target tracking.
     if tracker is not None:
         target = tracker.update(
@@ -133,6 +144,9 @@ def visualize(frame_bgr):
         )
     else:
         target = _last_target
+
+    if target is not None and target.found:
+        _last_valid_target = target
 
     # Lane servoing for steering.
     if lane_agent is not None:
@@ -144,6 +158,17 @@ def visualize(frame_bgr):
     else:
         lane_left, lane_right = 0.0, 0.0
 
+    intersection_seen = bool(
+        lane_agent is not None
+        and lane_agent.last_debug_info.get('intersection_like', False)
+    )
+    if intersection_seen:
+        _lane_disabled_until = time.time() + 1.2
+
+    lane_disabled = time.time() < _lane_disabled_until
+    if lane_disabled:
+        lane_left, lane_right = 0.0, 0.0
+
     # Convoy controller combines distance state with lane speeds.
     if convoy_ctrl is not None and target is not None:
         command = convoy_ctrl.decide(
@@ -151,6 +176,7 @@ def visualize(frame_bgr):
             lane_left=lane_left,
             lane_right=lane_right,
             image_width=image_width,
+            lane_disabled=lane_disabled,
         )
     else:
         command = _last_command
@@ -166,6 +192,7 @@ def visualize(frame_bgr):
     _last_command   = command
     _last_lane_left  = lane_left
     _last_lane_right = lane_right
+    _last_lane_disabled = lane_disabled
 
     return create_convoying_visualization(
         image_bgr=frame_bgr,
@@ -245,6 +272,7 @@ def status():
         'command':           _command_to_dict(_last_command),
         'lane_left':         _last_lane_left,
         'lane_right':        _last_lane_right,
+        'lane_disabled':     _last_lane_disabled,
     })
 
 
@@ -272,6 +300,126 @@ def update_config():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _add_blue_target_fallback(frame_rgb, detections, last_target=None):
+    """
+    Fallback target detector for real/sim convoying when best.onnx is missing.
+
+    It detects a blue lead robot/truck body and presents it to TargetTracker as
+    class_id=1, the same class used for trucks by the YOLO model.
+    """
+    if detections is None:
+        detections = []
+
+    for _, _, class_id in detections:
+        if class_id == 1:
+            return detections
+
+    h, w = frame_rgb.shape[:2]
+    hsv = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2HSV)
+
+    lower_blue = np.array([90, 40, 20])
+    upper_blue = np.array([135, 255, 255])
+    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+
+    mask[: int(h * 0.16), :] = 0
+
+    kernel = np.ones((3, 3), np.uint8)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    previous_center = None
+    if last_target is not None and last_target.center_x is not None and last_target.center_y is not None:
+        previous_center = (last_target.center_x, last_target.center_y)
+
+    candidates = []
+
+    for contour in contours:
+        x, y, bw, bh = cv2.boundingRect(contour)
+
+        if bw < 12 or bh < 14:
+            continue
+
+        x, y, bw, bh = _tighten_blue_bbox(mask, x, y, bw, bh)
+
+        bbox = (x, y, x + bw, y + bh)
+        area = bw * bh
+        bottom_y = y + bh
+        center_x = x + bw / 2.0
+        center_y = y + bh / 2.0
+
+        if area < 350:
+            continue
+
+        if bottom_y < h * 0.22:
+            continue
+
+        aspect = bw / float(max(1, bh))
+        if aspect > 1.8 or aspect < 0.25:
+            continue
+
+        if previous_center is None:
+            if center_x < w * 0.22 or center_x > w * 0.78:
+                continue
+
+        if previous_center is not None:
+            px, py = previous_center
+            dist = ((center_x - px) ** 2 + (center_y - py) ** 2) ** 0.5
+        else:
+            dist = 0.0
+
+        score = area + bottom_y * 70.0
+        if previous_center is None:
+            score -= abs(center_x - w * 0.5) * 240.0
+            score -= max(0.0, bottom_y - h * 0.70) * 180.0
+        else:
+            score -= dist * 70.0
+
+        candidates.append((score, bbox))
+
+    if not candidates:
+        return detections
+
+    candidates.sort(reverse=True, key=lambda item: item[0])
+    _, best_bbox = candidates[0]
+    detections.append((best_bbox, 0.99, 1))
+    return detections
+
+
+def _tighten_blue_bbox(mask, x, y, bw, bh):
+    roi = mask[y:y + bh, x:x + bw]
+
+    if roi.size == 0:
+        return x, y, bw, bh
+
+    col_counts = np.sum(roi > 0, axis=0)
+    row_counts = np.sum(roi > 0, axis=1)
+
+    if col_counts.max() <= 0 or row_counts.max() <= 0:
+        return x, y, bw, bh
+
+    col_threshold = max(2, int(col_counts.max() * 0.35))
+    row_threshold = max(2, int(row_counts.max() * 0.20))
+
+    valid_cols = np.where(col_counts >= col_threshold)[0]
+    valid_rows = np.where(row_counts >= row_threshold)[0]
+
+    if len(valid_cols) == 0 or len(valid_rows) == 0:
+        return x, y, bw, bh
+
+    new_x1 = int(valid_cols[0])
+    new_x2 = int(valid_cols[-1])
+    new_y1 = int(valid_rows[0])
+    new_y2 = int(valid_rows[-1])
+
+    new_x = x + new_x1
+    new_y = y + new_y1
+    new_w = max(1, new_x2 - new_x1)
+    new_h = max(1, new_y2 - new_y1)
+
+    return new_x, new_y, new_w, new_h
 
 def _target_to_dict(target):
     if target is None:
