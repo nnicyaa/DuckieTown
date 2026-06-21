@@ -1,0 +1,948 @@
+diff --git a/GodotSimulation/ducky-bot/scenes/convoying.tscn b/GodotSimulation/ducky-bot/scenes/convoying.tscn
+index 9142ef3dd4b041d7e94ae31e150a00d1e334a2fe..ac45b1b4928b941297c4bf20ff61c42371f40105 100644
+--- a/GodotSimulation/ducky-bot/scenes/convoying.tscn
++++ b/GodotSimulation/ducky-bot/scenes/convoying.tscn
+@@ -59,8 +59,8 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.2620525, 0.010445523, 4.869
+ [node name="LeadTruck" parent="." instance=ExtResource("6_lead")]
+ transform = Transform3D(-0.99948883, 0, -0.03196899, 0, 1, 0, 0.03196899, 0, -0.99948883, 4.17, 0.08, 2.55)
+ script = ExtResource("7_lead_script")
+-speed = 0.06
+-reach_distance = 0.04
++speed = 0.04
++reach_distance = 0.05
+ rotation_offset_degrees = 180.0
+ 
+ [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=1342242373]
+diff --git a/GodotSimulation/ducky-bot/scripts/LeadTruckDriver.gd b/GodotSimulation/ducky-bot/scripts/LeadTruckDriver.gd
+index 549afaa5334780e7e1aba3f1cff1260ff069619d..45769337e17b6dc0939f2311c24601d5671c3c5f 100644
+--- a/GodotSimulation/ducky-bot/scripts/LeadTruckDriver.gd
++++ b/GodotSimulation/ducky-bot/scripts/LeadTruckDriver.gd
+@@ -1,7 +1,7 @@
+ extends Node3D
+ 
+-@export var speed: float = 0.08
+-@export var reach_distance: float = 0.04
++@export var speed: float = 0.16
++@export var reach_distance: float = 0.05
+ @export var rotation_offset_degrees: float = 180.0
+ 
+ var _points: Array[Vector3] = []
+@@ -11,36 +11,33 @@ var _finished: bool = false
+ 
+ func _ready() -> void:
+ 	# Lead truck starts close enough to follower.
+-	# It moves faster than before, but follows a smoother wider left turn
+-	# so it does not cut across the lane.
++	# It goes straight a bit longer, turns left smoothly,
++	# then continues straight after the turn.
+ 
+ 	_points = [
+-		# straight before crossroad
+-		Vector3(4.17, 0.08, 2.30),
+-		Vector3(4.17, 0.08, 2.43),
+-		Vector3(4.17, 0.08, 2.56),
+-		Vector3(4.17, 0.08, 2.68),
+-		Vector3(4.18, 0.08, 2.78),
+-
+-		# smoother left turn
+-		Vector3(4.21, 0.08, 2.88),
+-		Vector3(4.26, 0.08, 2.97),
+-		Vector3(4.34, 0.08, 3.05),
+-		Vector3(4.44, 0.08, 3.11),
+-		Vector3(4.57, 0.08, 3.16),
+-		Vector3(4.72, 0.08, 3.19),
+-		Vector3(4.88, 0.08, 3.21),
+-		Vector3(5.05, 0.08, 3.22),
+-		Vector3(5.20, 0.08, 3.22),
+-
+-		# after turn: continue straight in new lane
+-		Vector3(5.40, 0.08, 3.22),
+-		Vector3(5.65, 0.08, 3.22),
+-		Vector3(5.90, 0.08, 3.22),
+-		Vector3(6.15, 0.08, 3.22),
+-		Vector3(6.40, 0.08, 3.22),
+-		Vector3(6.65, 0.08, 3.22),
+-	]
++	# straight before crossroad
++	Vector3(4.17, 0.08, 2.30),
++	Vector3(4.17, 0.08, 2.45),
++	Vector3(4.17, 0.08, 2.60),
++	Vector3(4.17, 0.08, 2.72),
++
++	# smooth left turn starts earlier here
++	Vector3(4.22, 0.08, 2.84),
++	Vector3(4.30, 0.08, 2.94),
++	Vector3(4.42, 0.08, 3.02),
++	Vector3(4.58, 0.08, 3.08),
++	Vector3(4.76, 0.08, 3.12),
++	Vector3(4.96, 0.08, 3.14),
++	Vector3(5.15, 0.08, 3.15),
++
++	# after turn: keep going straight in the new lane
++	Vector3(5.35, 0.08, 3.15),
++	Vector3(5.60, 0.08, 3.15),
++	Vector3(5.85, 0.08, 3.15),
++	Vector3(6.10, 0.08, 3.15),
++	Vector3(6.35, 0.08, 3.15),
++	Vector3(6.60, 0.08, 3.15),
++]
+ 
+ 	global_position = _points[0]
+ 	_current_index = 1
+diff --git a/GodotSimulation/ducky-bot/scripts/LeadTruckDriver.gd.uid b/GodotSimulation/ducky-bot/scripts/LeadTruckDriver.gd.uid
+deleted file mode 100644
+index 7f80d54892bc6c7f5bbf91d770e2ddebc7a55a2c..0000000000000000000000000000000000000000
+--- a/GodotSimulation/ducky-bot/scripts/LeadTruckDriver.gd.uid
++++ /dev/null
+@@ -1 +0,0 @@
+-uid://b0dgesw7oyft8
+\ No newline at end of file
+diff --git a/servers/convoying/real_server.py b/servers/convoying/real_server.py
+index fee2566bef2511586870293ddd0fa2ef4220be96..c2d9875cb483b0843d556355ace093754b7bbdc3 100644
+--- a/servers/convoying/real_server.py
++++ b/servers/convoying/real_server.py
+@@ -11,7 +11,6 @@ project_root = os.path.join(script_dir, '..', '..')
+ sys.path.insert(0, project_root)
+ 
+ import cv2
+-import numpy as np
+ from dataclasses import replace
+ from flask import Flask, Response, render_template_string, jsonify, request
+ 
+@@ -46,12 +45,9 @@ _frame_queue    = queue.Queue(maxsize=1)
+ _detection_lock = threading.Lock()
+ _last_detections = []
+ _last_target     = None
+-_last_valid_target = None
+ _last_command    = None
+ _last_lane_left  = 0.0
+ _last_lane_right = 0.0
+-_last_lane_disabled = False
+-_lane_disabled_until = 0.0
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -96,8 +92,7 @@ def visualize(frame_bgr):
+         -> wheel speeds
+         -> browser visualization
+     """
+-    global _last_target, _last_valid_target, _last_command
+-    global _last_lane_left, _last_lane_right, _last_lane_disabled, _lane_disabled_until
++    global _last_target, _last_command, _last_lane_left, _last_lane_right
+ 
+     if frame_bgr is None:
+         return frame_bgr
+@@ -129,12 +124,6 @@ def visualize(frame_bgr):
+     else:
+         scaled_detections = detections
+ 
+-    scaled_detections = _add_blue_target_fallback(
+-        frame_rgb=frame_rgb,
+-        detections=scaled_detections,
+-        last_target=_last_valid_target,
+-    )
+-
+     # Target tracking.
+     if tracker is not None:
+         target = tracker.update(
+@@ -145,9 +134,6 @@ def visualize(frame_bgr):
+     else:
+         target = _last_target
+ 
+-    if target is not None and target.found:
+-        _last_valid_target = target
+-
+     # Lane servoing for steering.
+     if lane_agent is not None:
+         try:
+@@ -158,17 +144,6 @@ def visualize(frame_bgr):
+     else:
+         lane_left, lane_right = 0.0, 0.0
+ 
+-    # intersection_seen = bool(
+-    #     lane_agent is not None
+-    #     and lane_agent.last_debug_info.get('intersection_like', False)
+-    # )
+-    # if intersection_seen:
+-    #     _lane_disabled_until = time.time() + 1.2
+-    #
+-    # lane_disabled = time.time() < _lane_disabled_until
+-    # if lane_disabled:
+-    #     lane_left, lane_right = 0.0, 0.0
+-
+     # Convoy controller combines distance state with lane speeds.
+     if convoy_ctrl is not None and target is not None:
+         command = convoy_ctrl.decide(
+@@ -176,7 +151,6 @@ def visualize(frame_bgr):
+             lane_left=lane_left,
+             lane_right=lane_right,
+             image_width=image_width,
+-            lane_disabled=lane_disabled,
+         )
+     else:
+         command = _last_command
+@@ -192,7 +166,6 @@ def visualize(frame_bgr):
+     _last_command   = command
+     _last_lane_left  = lane_left
+     _last_lane_right = lane_right
+-    _last_lane_disabled = lane_disabled
+ 
+     return create_convoying_visualization(
+         image_bgr=frame_bgr,
+@@ -272,7 +245,6 @@ def status():
+         'command':           _command_to_dict(_last_command),
+         'lane_left':         _last_lane_left,
+         'lane_right':        _last_lane_right,
+-        'lane_disabled':     _last_lane_disabled,
+     })
+ 
+ 
+@@ -301,126 +273,6 @@ def update_config():
+ # Helpers
+ # ---------------------------------------------------------------------------
+ 
+-def _add_blue_target_fallback(frame_rgb, detections, last_target=None):
+-    """
+-    Fallback target detector for real/sim convoying when best.onnx is missing.
+-
+-    It detects a blue lead robot/truck body and presents it to TargetTracker as
+-    class_id=1, the same class used for trucks by the YOLO model.
+-    """
+-    if detections is None:
+-        detections = []
+-
+-    for _, _, class_id in detections:
+-        if class_id == 1:
+-            return detections
+-
+-    h, w = frame_rgb.shape[:2]
+-    hsv = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2HSV)
+-
+-    lower_blue = np.array([90, 40, 20])
+-    upper_blue = np.array([135, 255, 255])
+-    mask = cv2.inRange(hsv, lower_blue, upper_blue)
+-
+-    mask[: int(h * 0.16), :] = 0
+-
+-    kernel = np.ones((3, 3), np.uint8)
+-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+-    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+-
+-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+-
+-    previous_center = None
+-    if last_target is not None and last_target.center_x is not None and last_target.center_y is not None:
+-        previous_center = (last_target.center_x, last_target.center_y)
+-
+-    candidates = []
+-
+-    for contour in contours:
+-        x, y, bw, bh = cv2.boundingRect(contour)
+-
+-        if bw < 12 or bh < 14:
+-            continue
+-
+-        x, y, bw, bh = _tighten_blue_bbox(mask, x, y, bw, bh)
+-
+-        bbox = (x, y, x + bw, y + bh)
+-        area = bw * bh
+-        bottom_y = y + bh
+-        center_x = x + bw / 2.0
+-        center_y = y + bh / 2.0
+-
+-        if area < 350:
+-            continue
+-
+-        if bottom_y < h * 0.22:
+-            continue
+-
+-        aspect = bw / float(max(1, bh))
+-        if aspect > 1.8 or aspect < 0.25:
+-            continue
+-
+-        if previous_center is None:
+-            if center_x < w * 0.22 or center_x > w * 0.78:
+-                continue
+-
+-        if previous_center is not None:
+-            px, py = previous_center
+-            dist = ((center_x - px) ** 2 + (center_y - py) ** 2) ** 0.5
+-        else:
+-            dist = 0.0
+-
+-        score = area + bottom_y * 70.0
+-        if previous_center is None:
+-            score -= abs(center_x - w * 0.5) * 240.0
+-            score -= max(0.0, bottom_y - h * 0.70) * 180.0
+-        else:
+-            score -= dist * 70.0
+-
+-        candidates.append((score, bbox))
+-
+-    if not candidates:
+-        return detections
+-
+-    candidates.sort(reverse=True, key=lambda item: item[0])
+-    _, best_bbox = candidates[0]
+-    detections.append((best_bbox, 0.99, 1))
+-    return detections
+-
+-
+-def _tighten_blue_bbox(mask, x, y, bw, bh):
+-    roi = mask[y:y + bh, x:x + bw]
+-
+-    if roi.size == 0:
+-        return x, y, bw, bh
+-
+-    col_counts = np.sum(roi > 0, axis=0)
+-    row_counts = np.sum(roi > 0, axis=1)
+-
+-    if col_counts.max() <= 0 or row_counts.max() <= 0:
+-        return x, y, bw, bh
+-
+-    col_threshold = max(2, int(col_counts.max() * 0.35))
+-    row_threshold = max(2, int(row_counts.max() * 0.20))
+-
+-    valid_cols = np.where(col_counts >= col_threshold)[0]
+-    valid_rows = np.where(row_counts >= row_threshold)[0]
+-
+-    if len(valid_cols) == 0 or len(valid_rows) == 0:
+-        return x, y, bw, bh
+-
+-    new_x1 = int(valid_cols[0])
+-    new_x2 = int(valid_cols[-1])
+-    new_y1 = int(valid_rows[0])
+-    new_y2 = int(valid_rows[-1])
+-
+-    new_x = x + new_x1
+-    new_y = y + new_y1
+-    new_w = max(1, new_x2 - new_x1)
+-    new_h = max(1, new_y2 - new_y1)
+-
+-    return new_x, new_y, new_w, new_h
+-
+ def _target_to_dict(target):
+     if target is None:
+         return None
+diff --git a/servers/convoying/virtual_server.py b/servers/convoying/virtual_server.py
+index bb39ee7e0ddbe5ab075ce9c3bcd7af6b7cdcd301..fe02e9ba9636bc41ec924c048e0223cd3102ffdf 100644
+--- a/servers/convoying/virtual_server.py
++++ b/servers/convoying/virtual_server.py
+@@ -4,7 +4,6 @@ import threading
+ import queue
+ import socket
+ import argparse
+-import time
+ 
+ script_dir = os.path.dirname(os.path.abspath(__file__))
+ project_root = os.path.join(script_dir, '..', '..')
+@@ -54,7 +53,6 @@ _last_command = None
+ _last_lane_left = 0.0
+ _last_lane_right = 0.0
+ _last_red_line_state = None
+-_lane_disabled_until = 0.0
+ 
+ 
+ # ---------------------------------------------------------------------------
+@@ -118,7 +116,6 @@ def visualize(frame_rgb):
+     global _last_lane_left
+     global _last_lane_right
+     global _last_red_line_state
+-    global _lane_disabled_until
+ 
+     if frame_rgb is None:
+         return _placeholder("Waiting for Godot camera...")
+@@ -176,17 +173,6 @@ def visualize(frame_rgb):
+     else:
+         lane_left, lane_right = 0.0, 0.0
+ 
+-    intersection_seen = bool(
+-        lane_agent is not None
+-        and lane_agent.last_debug_info.get('intersection_like', False)
+-    )
+-    if intersection_seen:
+-        _lane_disabled_until = time.time() + 1.2
+-
+-    lane_disabled = lane_disabled or time.time() < _lane_disabled_until
+-    if lane_disabled:
+-        lane_left, lane_right = 0.0, 0.0
+-
+     # Convoy controller.
+     # Normal mode: lane_left/lane_right steer the bot.
+     # Red-line mode: lane_disabled=True, controller ignores lane and follows leader only.
+@@ -447,13 +433,8 @@ def _add_blue_truck_fallback(frame_rgb, detections, last_target=None):
+         else:
+             dist = 0.0
+ 
+-        # Prefer lower/larger target once tracking has started. On the initial
+-        # frame, reject low edge blobs by preferring targets nearer lane center.
++        # Prefer lower/larger target. Previous target consistency helps but should not dominate.
+         score = area + bottom_y * 80.0
+-        if previous_center is None:
+-            center_penalty = abs(center_x - w * 0.5) * 140.0
+-            too_low_penalty = max(0.0, bottom_y - h * 0.62) * 220.0
+-            score -= center_penalty + too_low_penalty
+         if previous_center is not None:
+             score -= dist * 60.0
+ 
+diff --git a/tasks/convoying/packages/convoy_controller_activity.py b/tasks/convoying/packages/convoy_controller_activity.py
+index c29cfac81cd5f9658774d0047eb319d2f9941b7d..117347ebffef8c48c0fffebcc271e43a7f9b2c69 100644
+--- a/tasks/convoying/packages/convoy_controller_activity.py
++++ b/tasks/convoying/packages/convoy_controller_activity.py
+@@ -1,4 +1,3 @@
+-from collections import deque
+ from typing import Optional
+ 
+ from tasks.convoying.packages.follow_types import (
+@@ -17,8 +16,12 @@ class ConvoyController:
+     Shared convoy controller for simulation and real robot.
+ 
+     Normal mode:
+-        leader following controls steering and distance
+-        lane following is only a fallback when the leader is lost
++        lane following controls steering
++        leader distance controls speed
++
++    Red-line / crossroad mode:
++        lane following is disabled
++        robot follows only the leader truck for steering
+     """
+ 
+     def __init__(
+@@ -31,12 +34,9 @@ class ConvoyController:
+         lost_grace_multiplier: float = 0.25,
+ 
+         # Leader-only steering settings.
+-        leader_steering_gain: float = 0.55,
+-        leader_max_steer_ratio: float = 0.35,
++        leader_steering_gain: float = 1.25,
++        leader_max_steer_ratio: float = 0.95,
+         leader_steering_sign: float = 1.0,
+-        leader_deadband: float = 0.12,
+-        leader_history_frames: int = 12,
+-        leader_memory_frames: int = 12,
+     ):
+         self.close_multiplier = close_multiplier
+         self.good_multiplier = good_multiplier
+@@ -49,15 +49,10 @@ class ConvoyController:
+         self.leader_steering_gain = leader_steering_gain
+         self.leader_max_steer_ratio = leader_max_steer_ratio
+         self.leader_steering_sign = leader_steering_sign
+-        self.leader_deadband = leader_deadband
+-        self.leader_memory_frames = leader_memory_frames
+ 
+         self._had_target = False
+         self._lost_frames = 0
+         self._last_distance_state = LOST
+-        self._leader_evidence_history = deque(maxlen=leader_history_frames)
+-        self._leader_memory_count = 0
+-        self._last_leader_evidence = 0.0
+ 
+     def decide(
+         self,
+@@ -72,24 +67,50 @@ class ConvoyController:
+             self._lost_frames = 0
+             self._last_distance_state = target.distance_state
+ 
+-            # If we can see the leader, follow the leader. The lane mask is
+-            # unreliable at intersections and should not steer the robot.
+-            return self._leader_only_command(
+-                target=target,
+-                image_width=image_width,
+-            )
++            if target.distance_state == TOO_CLOSE:
++                return self._stop("target_too_close_stop")
++
++            # Main red-line / crossroad fix:
++            # When lane following is disabled, ignore lane_left/lane_right completely.
++            if lane_disabled:
++                return self._leader_only_command(
++                    target=target,
++                    image_width=image_width,
++                )
++
++            # Normal lane-following behavior.
++            if target.distance_state == CLOSE:
++                return self._scale(
++                    lane_left,
++                    lane_right,
++                    self.close_multiplier,
++                    "target_close_slow_down_lane_following",
++                )
++
++            if target.distance_state == GOOD:
++                return self._scale(
++                    lane_left,
++                    lane_right,
++                    self.good_multiplier,
++                    "good_distance_lane_following",
++                )
++
++            if target.distance_state == FAR:
++                return self._scale(
++                    lane_left,
++                    lane_right,
++                    self.far_multiplier,
++                    "target_far_speed_up_lane_following",
++                )
+ 
+         # Target is lost.
+         self._lost_frames += 1
+-        if self._leader_memory_count > 0:
+-            self._leader_memory_count -= 1
+ 
+         # Important:
+         # If lane is disabled because of red line, do NOT continue lane following.
+-        # If leader is lost at crossroad, creep straight instead of trusting
+-        # ambiguous intersection lane markings.
++        # If leader is lost at crossroad, stop.
+         if lane_disabled:
+-            return self._remembered_leader_command("lane_disabled_target_lost_follow_memory")
++            return self._stop("lane_disabled_target_lost_stop")
+ 
+         if self._last_distance_state == TOO_CLOSE:
+             return self._stop("target_lost_after_too_close_emergency_stop")
+@@ -105,15 +126,12 @@ class ConvoyController:
+         if self._last_distance_state == CLOSE:
+             return self._stop("target_lost_after_close_stop")
+ 
+-        if self._had_target and self._leader_memory_count > 0:
+-            return self._remembered_leader_command("target_temporarily_lost_follow_memory")
+-
+-        if lane_left > 0.0 or lane_right > 0.0:
++        if self._had_target and self._lost_frames <= self.lost_grace_frames:
+             return self._scale(
+                 lane_left,
+                 lane_right,
+                 self.lost_grace_multiplier,
+-                "leader_lost_lane_fallback",
++                "target_temporarily_lost_keep_lane_slowly",
+             )
+ 
+         return self._stop("target_lost_stop")
+@@ -126,28 +144,21 @@ class ConvoyController:
+         if image_width is None or image_width <= 0 or target.center_x is None:
+             return self._stop("leader_only_no_target_center_stop")
+ 
+-        error = self._leader_mask_evidence(target, image_width)
+-        self._remember_leader_evidence(error)
+-        error = self._last_leader_evidence
++        error = self._target_center_error(target, image_width)
+         error *= self.leader_steering_sign
+-        if abs(error) < self.leader_deadband:
+-            error = 0.0
+ 
+         # Distance still controls forward speed.
+-        if target.distance_state == TOO_CLOSE:
+-            base_speed = self.max_speed * 0.12
+-            reason = "leader_following_too_close_creep"
+-        elif target.distance_state == CLOSE:
++        if target.distance_state == CLOSE:
+             base_speed = self.max_speed * 0.30
+-            reason = "leader_following_close_slow_down"
++            reason = "red_line_leader_only_close_slow_down"
+         elif target.distance_state == GOOD:
+             base_speed = self.max_speed * 0.70
+-            reason = "leader_following_good_distance"
++            reason = "red_line_leader_only_good_distance"
+         elif target.distance_state == FAR:
+             base_speed = self.max_speed * 0.95
+-            reason = "leader_following_far_speed_up"
++            reason = "red_line_leader_only_far_speed_up"
+         else:
+-            return self._stop("leader_following_invalid_distance_state")
++            return self._stop("red_line_leader_only_invalid_distance_state")
+ 
+         max_steer = self.max_speed * self.leader_max_steer_ratio
+         steering = error * self.leader_steering_gain * self.max_speed
+@@ -169,81 +180,6 @@ class ConvoyController:
+             reason=reason,
+         )
+ 
+-    def _remember_leader_evidence(self, evidence: float) -> None:
+-        evidence = self._clamp_range(evidence, -1.0, 1.0)
+-        self._leader_evidence_history.append(evidence)
+-        self._last_leader_evidence = self._smoothed_leader_evidence()
+-        self._leader_memory_count = self.leader_memory_frames
+-
+-    def _smoothed_leader_evidence(self) -> float:
+-        if not self._leader_evidence_history:
+-            return 0.0
+-
+-        values = list(self._leader_evidence_history)
+-        avg = sum(values) / len(values)
+-
+-        if len(values) >= 4:
+-            mid = len(values) // 2
+-            old_avg = sum(values[:mid]) / len(values[:mid])
+-            new_avg = sum(values[mid:]) / len(values[mid:])
+-            trend = new_avg - old_avg
+-        else:
+-            trend = 0.0
+-
+-        return self._clamp_range(0.95 * avg + 0.05 * trend, -1.0, 1.0)
+-
+-    def _leader_mask_evidence(
+-        self,
+-        target: TargetInfo,
+-        image_width: int,
+-    ) -> float:
+-        if target.bbox is None:
+-            return self._target_center_error(target, image_width)
+-
+-        x1, _, x2, _ = target.bbox
+-        half_width = image_width / 2.0
+-
+-        left_width = max(0.0, min(float(x2), half_width) - max(float(x1), 0.0))
+-        right_width = max(0.0, min(float(x2), float(image_width)) - max(float(x1), half_width))
+-        total_width = left_width + right_width
+-
+-        if total_width <= 0.0:
+-            return self._target_center_error(target, image_width)
+-
+-        # Positive evidence means more leader-mask mass is on the left side
+-        # of the camera, so the follower should turn left. Negative means
+-        # more mass is on the right, so the follower should turn right.
+-        evidence = (left_width - right_width) / total_width
+-
+-        # Blend with the box center so a fully left/right box still gives a
+-        # smooth correction instead of an all-or-nothing steering command.
+-        center_error = self._target_center_error(target, image_width)
+-        return self._clamp_range(0.35 * evidence + 0.65 * center_error, -1.0, 1.0)
+-
+-    def _remembered_leader_command(self, reason: str) -> ConvoyCommand:
+-        if self._leader_memory_count <= 0:
+-            return self._straight(self.max_speed * 0.12, reason + "_straight")
+-
+-        base_speed = self.max_speed * 0.18
+-        error = self._last_leader_evidence * self.leader_steering_sign
+-        if abs(error) < self.leader_deadband:
+-            error = 0.0
+-
+-        max_steer = self.max_speed * self.leader_max_steer_ratio
+-        steering = error * self.leader_steering_gain * self.max_speed
+-        steering = self._clamp_range(steering, -max_steer, max_steer)
+-
+-        left_speed = self._clamp(base_speed - steering)
+-        right_speed = self._clamp(base_speed + steering)
+-
+-        return ConvoyCommand(
+-            should_move=left_speed > 0.0 or right_speed > 0.0,
+-            left_speed=left_speed,
+-            right_speed=right_speed,
+-            speed_multiplier=base_speed / self.max_speed if self.max_speed > 0 else 0.0,
+-            reason=reason,
+-        )
+-
+     def _target_center_error(
+         self,
+         target: TargetInfo,
+@@ -282,16 +218,6 @@ class ConvoyController:
+             reason=reason,
+         )
+ 
+-    def _straight(self, speed: float, reason: str) -> ConvoyCommand:
+-        speed = self._clamp(speed)
+-        return ConvoyCommand(
+-            should_move=speed > 0.0,
+-            left_speed=speed,
+-            right_speed=speed,
+-            speed_multiplier=speed / self.max_speed if self.max_speed > 0 else 0.0,
+-            reason=reason,
+-        )
+-
+     def _clamp(self, value: float) -> float:
+         return self._clamp_range(value, 0.0, self.max_speed)
+ 
+diff --git a/tasks/visual_lane_servoing/packages/agent.py b/tasks/visual_lane_servoing/packages/agent.py
+index b877371ec508421556cec4f5dfdbb86c977aac4d..ebc225693ce2d2e0c637c42c1f756445d186a2ad 100644
+--- a/tasks/visual_lane_servoing/packages/agent.py
++++ b/tasks/visual_lane_servoing/packages/agent.py
+@@ -13,82 +13,34 @@ _CONFIG_FILE = os.path.normpath(os.path.join(
+ ))
+ 
+ _LINE_OFFSET = 160
+-_ROI_START = 0.47
+-_NUM_SLICES = 3
+-_SLICE_TOL = 5
+-_MAX_MARKER_RUN_RATIO = 0.22
+-_MIN_MARKER_COLUMN_PIXELS = 1
+-
+-
+-def _marker_center_from_strip(strip: np.ndarray, side: str, image_width: int):
+-    col_counts = np.count_nonzero(strip > 0, axis=0)
+-    cols = np.where(col_counts >= _MIN_MARKER_COLUMN_PIXELS)[0]
+-    if len(cols) == 0:
+-        return None, False
+-
+-    splits = np.where(np.diff(cols) > 1)[0] + 1
+-    runs = np.split(cols, splits)
+-    max_run_width = max(8, int(image_width * _MAX_MARKER_RUN_RATIO))
+-
+-    candidates = []
+-    wide_rejected = False
+-    for run in runs:
+-        if len(run) == 0:
+-            continue
+-
+-        x0, x1 = int(run[0]), int(run[-1])
+-        width = x1 - x0 + 1
+-        pixels = int(col_counts[run].sum())
+-
+-        # Intersections create broad horizontal bands across a slice. Those
+-        # should not be averaged as if they were a lane boundary.
+-        if width > max_run_width:
+-            wide_rejected = True
+-            continue
+-
+-        center = float(np.average(run, weights=col_counts[run]))
+-        if side == "yellow" and center > image_width * 0.70:
+-            continue
+-        if side == "white" and center < image_width * 0.30:
+-            continue
+-
+-        candidates.append((pixels, center))
+-
+-    if not candidates:
+-        return None, wide_rejected
+-
+-    candidates.sort(reverse=True)
+-    return int(candidates[0][1]), wide_rejected
++_ROI_START   = 0.47
++_NUM_SLICES  = 3
++_SLICE_TOL   = 5
+ 
+ 
+ def detect_lines_in_slices(
+-        mask_yellow: np.ndarray,
+-        mask_white: np.ndarray,
+-        h: int,
++    mask_yellow: np.ndarray,
++    mask_white:  np.ndarray,
++    h: int,
+ ) -> Tuple[list, list]:
+     slice_height = int(h * 0.35 / _NUM_SLICES)
+-    start_y = int(h * _ROI_START)
++    start_y      = int(h * _ROI_START)
+     yellow_xs, white_xs = [], []
+-    intersection_votes = 0
+ 
+     for i in range(_NUM_SLICES):
+         y = start_y + i * slice_height + slice_height // 2
+ 
+         strip_y = mask_yellow[y - _SLICE_TOL: y + _SLICE_TOL, :]
+-        x, wide = _marker_center_from_strip(strip_y, "yellow", mask_yellow.shape[1])
+-        if x is not None:
+-            yellow_xs.append(x)
+-        if wide:
+-            intersection_votes += 1
++        idx = np.where(strip_y > 0)[1]
++        if len(idx) > 0:
++            yellow_xs.append(int(np.mean(idx)))
+ 
+         strip_w = mask_white[y - _SLICE_TOL: y + _SLICE_TOL, :]
+-        x, wide = _marker_center_from_strip(strip_w, "white", mask_white.shape[1])
+-        if x is not None:
+-            white_xs.append(x)
+-        if wide:
+-            intersection_votes += 1
++        idx = np.where(strip_w > 0)[1]
++        if len(idx) > 0:
++            white_xs.append(int(np.mean(idx)))
+ 
+-    return yellow_xs, white_xs, intersection_votes >= 1
++    return yellow_xs, white_xs
+ 
+ 
+ class LaneServoingAgent:
+@@ -101,24 +53,23 @@ class LaneServoingAgent:
+         except Exception:
+             cfg = {}
+ 
+-        self.p_gain = cfg.get('p_gain', 0.1)
+-        self.d_gain = cfg.get('d_gain', 0.35)
+-        self.max_steer = cfg.get('max_steer', 0.4)
+-        self.base_speed = cfg.get('base_speed', 0.2)
+-        self.curve_speed = cfg.get('curve_speed', 0.2)
+-        self.curve_threshold = cfg.get('curve_threshold', 350)
+-        self.steering_threshold = cfg.get('steering_threshold', 0.2)
+-        self.curve_boost = cfg.get('curve_boost', 1.3)
++        self.p_gain              = cfg.get('p_gain',              0.1)
++        self.d_gain              = cfg.get('d_gain',              0.35)
++        self.max_steer           = cfg.get('max_steer',           0.4)
++        self.base_speed          = cfg.get('base_speed',          0.2)
++        self.curve_speed         = cfg.get('curve_speed',         0.2)
++        self.curve_threshold     = cfg.get('curve_threshold',     350)
++        self.steering_threshold  = cfg.get('steering_threshold',  0.2)
++        self.curve_boost         = cfg.get('curve_boost',         1.3)
+         self.detection_threshold = cfg.get('detection_threshold', 500)
+ 
+-        self.frame_count = 0
+-        self._prev_error = 0.0
+-        self._filtered_error = 0.0
+-        self._lane_half_width = float(_LINE_OFFSET)
+-        self._left_history = deque(maxlen=3)
+-        self._right_history = deque(maxlen=3)
+-        self._intersection_hold = 0
+-        self.last_debug_info = self._empty_debug_info(480, 640)
++        self.frame_count        = 0
++        self._prev_error        = 0.0
++        self._filtered_error    = 0.0
++        self._lane_half_width   = float(_LINE_OFFSET)
++        self._left_history      = deque(maxlen=3)
++        self._right_history     = deque(maxlen=3)
++        self.last_debug_info    = self._empty_debug_info(480, 640)
+ 
+     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
+         if left_det and right_det and yellow_xs and white_xs:
+@@ -138,7 +89,7 @@ class LaneServoingAgent:
+         return float(np.clip(error / (w / 2.0), -1.0, 1.0))
+ 
+     def _calculate_steering(self, error: float) -> float:
+-        error_diff = error - self._prev_error
++        error_diff       = error - self._prev_error
+         self._prev_error = error
+         steering = self.p_gain * error + self.d_gain * error_diff
+         return float(np.clip(steering, -self.max_steer, self.max_steer))
+@@ -148,29 +99,29 @@ class LaneServoingAgent:
+             return 0.0, 0.0
+ 
+         speed = self.curve_speed if is_curve else self.base_speed
+-
++        
+         if not both_visible:
+             speed *= 0.8
+ 
+-        left = speed - steering
++        left  = speed - steering
+         right = speed + steering
+ 
+         if is_curve and abs(steering) > self.steering_threshold:
+             if steering > 0:
+                 right *= 5
+             else:
+-                left *= self.curve_boost
++                left  *= self.curve_boost
+ 
+         return float(np.clip(left, 0.0, 1.0)), float(np.clip(right, 0.0, 1.0))
+ 
+     def _smooth(self, left, right, both_visible):
+         buf = 2 if both_visible else 1
+         if self._left_history.maxlen != buf:
+-            self._left_history = deque(maxlen=buf)
++            self._left_history  = deque(maxlen=buf)
+             self._right_history = deque(maxlen=buf)
+         self._left_history.append(left)
+         self._right_history.append(right)
+-        return (sum(self._left_history) / len(self._left_history),
++        return (sum(self._left_history)  / len(self._left_history),
+                 sum(self._right_history) / len(self._right_history))
+ 
+     def compute_commands(self, image: np.ndarray) -> Tuple[float, float]:
+@@ -183,60 +134,48 @@ class LaneServoingAgent:
+             print(f"[Agent] detect_lane_markings error: {e}")
+             return 0.0, 0.0
+ 
+-        mask_y = (mask_left * 255).astype(np.uint8)
++        mask_y = (mask_left  * 255).astype(np.uint8)
+         mask_w = (mask_right * 255).astype(np.uint8)
+ 
+         yellow_pixels = int(np.count_nonzero(mask_y))
+-        white_pixels = int(np.count_nonzero(mask_w))
+-        total_pixels = yellow_pixels + white_pixels
++        white_pixels  = int(np.count_nonzero(mask_w))
++        total_pixels  = yellow_pixels + white_pixels
+ 
+         combined = np.clip(mask_left + mask_right, 0, 1)
+         self.last_debug_info = {
+-            'roi': image,
+-            'lane_mask': (combined * 255).astype(np.uint8),
+-            'white_mask': mask_w,
+-            'yellow_mask': mask_y,
++            'roi':               image,
++            'lane_mask':         (combined * 255).astype(np.uint8),
++            'white_mask':        mask_w,
++            'yellow_mask':       mask_y,
+             'total_lane_pixels': total_pixels,
+-            'lateral_error': float(np.clip(self._prev_error, -1.0, 1.0)),
+-            'lane_detected': total_pixels >= self.detection_threshold,
+-            'frame_count': self.frame_count,
++            'lateral_error':     float(np.clip(self._prev_error, -1.0, 1.0)),
++            'lane_detected':     total_pixels >= self.detection_threshold,
++            'frame_count':       self.frame_count,
+         }
+ 
+-        h, w = mask_y.shape
+-        left_det = yellow_pixels > 0
+-        right_det = white_pixels > 0
+-        recovery = total_pixels < self.detection_threshold
+-
+-        yellow_xs, white_xs, intersection_like = detect_lines_in_slices(mask_y, mask_w, h)
+-        if intersection_like:
+-            self._intersection_hold = 18
+-        elif self._intersection_hold > 0:
+-            self._intersection_hold -= 1
++        h, w      = mask_y.shape
++        left_det  = yellow_pixels > 0
++        right_det = white_pixels  > 0
++        recovery  = total_pixels  < self.detection_threshold
+ 
+-        intersection_active = self._intersection_hold > 0
+-        both_visible = left_det and right_det and not recovery
++        yellow_xs, white_xs = detect_lines_in_slices(mask_y, mask_w, h)
++        both_visible        = left_det and right_det and not recovery
+         is_curve, curve_dir = detect_curve(yellow_xs, white_xs, self.curve_threshold)
+-        if intersection_active:
+-            is_curve, curve_dir = False, 0
+ 
+-        raw_error = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
+-        if intersection_active:
+-            raw_error = self._prev_error
++        raw_error            = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
+         self._filtered_error = 0.7 * self._filtered_error + 0.3 * raw_error
+-        steering = self._calculate_steering(self._filtered_error)
+-        left, right = self._motor_commands(steering, recovery, is_curve, both_visible)
+-        left, right = self._smooth(left, right, both_visible)
++        steering             = self._calculate_steering(self._filtered_error)
++        left, right          = self._motor_commands(steering, recovery, is_curve, both_visible)
++        left, right          = self._smooth(left, right, both_visible)
+ 
+         slice_height = int(h * 0.35 / _NUM_SLICES)
+-        start_y = int(h * _ROI_START)
++        start_y      = int(h * _ROI_START)
+         self.last_debug_info.update({
+             'yellow_xs': yellow_xs,
+-            'white_xs': white_xs,
+-            'slice_ys': [start_y + i * slice_height + slice_height // 2 for i in range(_NUM_SLICES)],
+-            'is_curve': is_curve,
++            'white_xs':  white_xs,
++            'slice_ys':  [start_y + i * slice_height + slice_height // 2 for i in range(_NUM_SLICES)],
++            'is_curve':  is_curve,
+             'curve_dir': curve_dir,
+-            'intersection_like': intersection_active,
+-            'intersection_raw': intersection_like,
+         })
+ 
+         return left, right
+@@ -251,12 +190,12 @@ class LaneServoingAgent:
+ 
+     def _empty_debug_info(self, h, w):
+         return {
+-            'roi': np.zeros((h, w, 3), dtype=np.uint8),
+-            'lane_mask': np.zeros((h, w), dtype=np.uint8),
+-            'white_mask': np.zeros((h, w), dtype=np.uint8),
+-            'yellow_mask': np.zeros((h, w), dtype=np.uint8),
++            'roi':               np.zeros((h, w, 3), dtype=np.uint8),
++            'lane_mask':         np.zeros((h, w),    dtype=np.uint8),
++            'white_mask':        np.zeros((h, w),    dtype=np.uint8),
++            'yellow_mask':       np.zeros((h, w),    dtype=np.uint8),
+             'total_lane_pixels': 0,
+-            'lateral_error': 0.0,
+-            'lane_detected': False,
+-            'frame_count': 0,
+-        }
+\ No newline at end of file
++            'lateral_error':     0.0,
++            'lane_detected':     False,
++            'frame_count':       0,
++        }
