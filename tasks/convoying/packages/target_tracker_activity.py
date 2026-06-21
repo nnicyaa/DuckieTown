@@ -231,15 +231,15 @@ class TargetTracker:
         bottom_ratio = bottom_y / float(image_height)
 
         # Stop only when the truck is really close.
-        if bottom_ratio >= 0.65:
+        if bottom_ratio >= 0.75:
             return TOO_CLOSE
 
         # Slow down when close, but not too early.
-        if bottom_ratio >= 0.52:
+        if bottom_ratio >= 0.62:
             return CLOSE
 
         # Normal following distance.
-        if bottom_ratio >= 0.34:
+        if bottom_ratio >= 0.44:
             return GOOD
 
         return FAR
