@@ -80,6 +80,7 @@ class TargetTracker:
             return self._build_target_info(
                 detection=selected,
                 image_height=image_height,
+                image_width=image_width,
                 reason="initial_target_selected",
             )
 
@@ -95,6 +96,7 @@ class TargetTracker:
         return self._build_target_info(
             detection=selected,
             image_height=image_height,
+            image_width=image_width,
             reason="target_tracked",
         )
 
@@ -164,13 +166,17 @@ class TargetTracker:
         detection: Detection,
         image_height: int,
         reason: str,
+        image_width: Optional[int] = None,
     ) -> TargetInfo:
         bbox, score, class_id = detection
         _, _, _, bottom_y = bbox
 
+        if image_width is None:
+            image_width = image_height
+
         center_x, center_y = self._center(bbox)
         area = self._area(bbox)
-        distance_state = self._distance_state(bottom_y, image_height)
+        distance_state = self._distance_state(bottom_y, image_height, bbox, image_width)
 
         self._has_target = True
         self._last_center_x = center_x
@@ -224,22 +230,27 @@ class TargetTracker:
         return width * height
 
     @staticmethod
-    def _distance_state(bottom_y: int, image_height: int) -> str:
+    def _distance_state(
+        bottom_y: int,
+        image_height: int,
+        bbox: Tuple[int, int, int, int],
+        image_width: int,
+    ) -> str:
         if image_height <= 0:
             return LOST
 
         bottom_ratio = bottom_y / float(image_height)
+        x1, _, x2, _ = bbox
+        width_ratio = max(0, x2 - x1) / float(image_width) if image_width > 0 else 1.0
 
-        # Stop only when the truck is really close.
         if bottom_ratio >= 0.75:
             return TOO_CLOSE
 
-        # Slow down when close, but not too early.
         if bottom_ratio >= 0.62:
             return CLOSE
 
-        # Normal following distance.
-        if bottom_ratio >= 0.44:
-            return GOOD
+        # Small leader in frame means far away — catch up even if bottom_y is mid-frame.
+        if width_ratio < 0.10 or bottom_ratio < 0.55:
+            return FAR
 
-        return FAR
+        return GOOD

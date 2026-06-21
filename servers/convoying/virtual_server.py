@@ -181,6 +181,7 @@ def visualize(frame_rgb):
         lane_left=lane_left,
         lane_right=lane_right,
         image_width=image_width,
+        image_height=image_height,
         lane_disabled=lane_disabled,
     )
 

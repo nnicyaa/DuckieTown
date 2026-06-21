@@ -10,6 +10,9 @@ from tasks.convoying.packages.follow_types import (
     LOST,
 )
 
+_IDEAL_BOTTOM_RATIO = 0.58
+_NARROW_WIDTH_RATIO = 0.12
+
 
 class ConvoyController:
     """
@@ -27,9 +30,9 @@ class ConvoyController:
     def __init__(
         self,
         close_multiplier: float = 0.05,
-        good_multiplier: float = 0.35,
-        far_multiplier: float = 0.60,
-        max_speed: float = 0.13,
+        good_multiplier: float = 0.75,
+        far_multiplier: float = 1.20,
+        max_speed: float = 0.28,
         lost_grace_frames: int = 35,
         lost_grace_multiplier: float = 0.25,
 
@@ -60,6 +63,7 @@ class ConvoyController:
         lane_left: float,
         lane_right: float,
         image_width: Optional[int] = None,
+        image_height: Optional[int] = None,
         lane_disabled: bool = False,
     ) -> ConvoyCommand:
         if target.found and target.distance_state != LOST:
@@ -70,15 +74,13 @@ class ConvoyController:
             if target.distance_state == TOO_CLOSE:
                 return self._stop("target_too_close_stop")
 
-            # Main red-line / crossroad fix:
-            # When lane following is disabled, ignore lane_left/lane_right completely.
             if lane_disabled:
                 return self._leader_only_command(
                     target=target,
                     image_width=image_width,
+                    image_height=image_height,
                 )
 
-            # Normal lane-following behavior.
             if target.distance_state == CLOSE:
                 return self._scale(
                     lane_left,
@@ -87,28 +89,19 @@ class ConvoyController:
                     "target_close_slow_down_lane_following",
                 )
 
-            if target.distance_state == GOOD:
-                return self._scale(
-                    lane_left,
-                    lane_right,
-                    self.good_multiplier,
-                    "good_distance_lane_following",
-                )
-
+            multiplier = self._follow_multiplier(target, image_height, image_width)
             if target.distance_state == FAR:
-                return self._scale(
-                    lane_left,
-                    lane_right,
-                    self.far_multiplier,
-                    "target_far_speed_up_lane_following",
-                )
+                multiplier = max(multiplier, self.far_multiplier)
 
-        # Target is lost.
+            reason = (
+                "target_far_speed_up_lane_following"
+                if target.distance_state == FAR
+                else "good_distance_lane_following"
+            )
+            return self._scale(lane_left, lane_right, multiplier, reason)
+
         self._lost_frames += 1
 
-        # Important:
-        # If lane is disabled because of red line, do NOT continue lane following.
-        # If leader is lost at crossroad, stop.
         if lane_disabled:
             return self._stop("lane_disabled_target_lost_stop")
 
@@ -136,10 +129,41 @@ class ConvoyController:
 
         return self._stop("target_lost_stop")
 
+    def _follow_multiplier(
+        self,
+        target: TargetInfo,
+        image_height: Optional[int],
+        image_width: Optional[int],
+    ) -> float:
+        """
+        Continuous catch-up gain from leader position and apparent size.
+        Ramps from good_multiplier at ideal follow distance up to far_multiplier
+        when the leader is small or high in the frame.
+        """
+        behind = 0.0
+
+        if target.bottom_y is not None and image_height and image_height > 0:
+            bottom_ratio = target.bottom_y / float(image_height)
+            behind = max(
+                0.0,
+                min(1.0, (_IDEAL_BOTTOM_RATIO - bottom_ratio) / _IDEAL_BOTTOM_RATIO),
+            )
+
+        if target.bbox is not None and image_width and image_width > 0:
+            width_ratio = max(0, target.bbox[2] - target.bbox[0]) / float(image_width)
+            narrow = max(
+                0.0,
+                min(1.0, (_NARROW_WIDTH_RATIO - width_ratio) / _NARROW_WIDTH_RATIO),
+            )
+            behind = max(behind, narrow)
+
+        return self.good_multiplier + behind * (self.far_multiplier - self.good_multiplier)
+
     def _leader_only_command(
         self,
         target: TargetInfo,
         image_width: Optional[int],
+        image_height: Optional[int],
     ) -> ConvoyCommand:
         if image_width is None or image_width <= 0 or target.center_x is None:
             return self._stop("leader_only_no_target_center_stop")
@@ -147,25 +171,25 @@ class ConvoyController:
         error = self._target_center_error(target, image_width)
         error *= self.leader_steering_sign
 
-        # Distance still controls forward speed.
         if target.distance_state == CLOSE:
             base_speed = self.max_speed * 0.30
             reason = "red_line_leader_only_close_slow_down"
-        elif target.distance_state == GOOD:
-            base_speed = self.max_speed * 0.70
-            reason = "red_line_leader_only_good_distance"
-        elif target.distance_state == FAR:
-            base_speed = self.max_speed * 0.95
-            reason = "red_line_leader_only_far_speed_up"
         else:
-            return self._stop("red_line_leader_only_invalid_distance_state")
+            multiplier = self._follow_multiplier(target, image_height, image_width)
+            if target.distance_state == FAR:
+                multiplier = max(multiplier, self.far_multiplier)
+            speed_frac = min(1.0, multiplier / self.far_multiplier) if self.far_multiplier > 0 else 0.0
+            base_speed = self.max_speed * speed_frac
+            reason = (
+                "red_line_leader_only_far_speed_up"
+                if target.distance_state == FAR
+                else "red_line_leader_only_good_distance"
+            )
 
         max_steer = self.max_speed * self.leader_max_steer_ratio
         steering = error * self.leader_steering_gain * self.max_speed
         steering = self._clamp_range(steering, -max_steer, max_steer)
 
-        # Differential drive:
-        # left slower + right faster = turn left.
         left_speed = base_speed - steering
         right_speed = base_speed + steering
 
@@ -186,9 +210,6 @@ class ConvoyController:
         image_width: int,
     ) -> float:
         half_width = image_width / 2.0
-
-        # Positive error = leader is left of image center.
-        # Negative error = leader is right of image center.
         return (half_width - float(target.center_x)) / half_width
 
     def _scale(
