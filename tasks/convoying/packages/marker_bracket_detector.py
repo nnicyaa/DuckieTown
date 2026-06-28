@@ -42,6 +42,7 @@ class MarkerDetection:
     center_y: Optional[float]
     dot_count: int
     reason: str
+    dot_centers: Tuple[Tuple[float, float], ...] = ()
     used_plate_mask: bool = False
 
 
@@ -195,39 +196,44 @@ class MarkerBracketDetector:
             dark_mask = cv2.bitwise_and(dark_mask, dark_mask, mask=dilated_plate)
 
         dark_ratio = float(np.count_nonzero(dark_mask)) / float(dark_mask.size)
-        if dark_ratio < self.min_dark_pixel_ratio or dark_ratio > self.max_dark_pixel_ratio:
-            return self._not_found(f"dark_ratio_out_of_range={dark_ratio:.3f}")
-
-        # Clean up speckle noise before contour extraction.
-        kernel = np.ones((3, 3), np.uint8)
-        dark_mask = cv2.morphologyEx(dark_mask, cv2.MORPH_OPEN, kernel)
-
-        contours, _ = cv2.findContours(dark_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        use_dark_contours = self.min_dark_pixel_ratio <= dark_ratio <= self.max_dark_pixel_ratio
 
         accepted_centers: List[Tuple[float, float]] = []
 
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area <= 0:
-                continue
+        if use_dark_contours:
+            # Clean up speckle noise before contour extraction.
+            kernel = np.ones((3, 3), np.uint8)
+            dark_mask = cv2.morphologyEx(dark_mask, cv2.MORPH_OPEN, kernel)
 
-            (cx, cy), radius = cv2.minEnclosingCircle(contour)
+            contours, _ = cv2.findContours(dark_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-            if radius < self.min_hole_radius or radius > self.max_hole_radius:
-                continue
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area <= 0:
+                    continue
 
-            # Roughly circular check: a true hole's contour area should be
-            # reasonably close to a circle of that enclosing radius. This
-            # rejects elongated shadows/cable shapes that happen to be dark
-            # but aren't hole-shaped.
-            circle_area = np.pi * radius * radius
-            if circle_area <= 0:
-                continue
-            circularity = area / circle_area
-            if circularity < 0.35:
-                continue
+                (cx, cy), radius = cv2.minEnclosingCircle(contour)
 
-            accepted_centers.append((cx, cy))
+                if radius < self.min_hole_radius or radius > self.max_hole_radius:
+                    continue
+
+                # Roughly circular check: a true hole's contour area should be
+                # reasonably close to a circle of that enclosing radius. This
+                # rejects elongated shadows/cable shapes that happen to be dark
+                # but aren't hole-shaped.
+                circle_area = np.pi * radius * radius
+                if circle_area <= 0:
+                    continue
+                circularity = area / circle_area
+                if circularity < 0.35:
+                    continue
+
+                accepted_centers.append((cx, cy))
+
+        if len(accepted_centers) < self.minimum_detected_dots:
+            accepted_centers.extend(
+                self._detect_edge_circles(gray, plate_mask, accepted_centers)
+            )
 
         dot_count = len(accepted_centers)
 
@@ -263,6 +269,7 @@ class MarkerBracketDetector:
 
         center_x = float(np.mean(xs)) + x1
         center_y = float(np.mean(ys)) + y1
+        dot_centers = tuple((float(cx + x1), float(cy + y1)) for cx, cy in accepted_centers)
 
         return MarkerDetection(
             found=True,
@@ -271,8 +278,72 @@ class MarkerBracketDetector:
             center_y=center_y,
             dot_count=dot_count,
             reason="marker_bracket_detected",
+            dot_centers=dot_centers,
             used_plate_mask=plate_mask is not None,
         )
+
+    @staticmethod
+    def _is_duplicate_center(
+        center: Tuple[float, float],
+        existing_centers: List[Tuple[float, float]],
+        min_distance: float,
+    ) -> bool:
+        cx, cy = center
+        for ex, ey in existing_centers:
+            dx = cx - ex
+            dy = cy - ey
+            if (dx * dx + dy * dy) ** 0.5 < min_distance:
+                return True
+        return False
+
+    def _detect_edge_circles(
+        self,
+        gray: np.ndarray,
+        plate_mask: Optional[np.ndarray],
+        existing_centers: List[Tuple[float, float]],
+    ) -> List[Tuple[float, float]]:
+        """
+        Fallback for simulated/painted circular dots that are not dark holes
+        on a white plate. It uses circle edges instead of dark-pixel blobs.
+        """
+        min_radius = max(1, int(round(self.min_hole_radius)))
+        max_radius = max(min_radius + 1, int(round(self.max_hole_radius)))
+        min_dist = max(4.0, self.min_hole_radius * 2.5)
+
+        blurred = cv2.medianBlur(gray, 5)
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=min_dist,
+            param1=80,
+            param2=10,
+            minRadius=min_radius,
+            maxRadius=max_radius,
+        )
+
+        if circles is None:
+            return []
+
+        accepted: List[Tuple[float, float]] = []
+        mask_for_filter = None
+        if plate_mask is not None:
+            mask_for_filter = cv2.dilate(plate_mask, np.ones((7, 7), np.uint8))
+
+        for cx, cy, radius in np.round(circles[0, :]).astype("int"):
+            if radius < min_radius or radius > max_radius:
+                continue
+            if mask_for_filter is not None:
+                if cy < 0 or cy >= mask_for_filter.shape[0] or cx < 0 or cx >= mask_for_filter.shape[1]:
+                    continue
+                if mask_for_filter[cy, cx] == 0:
+                    continue
+            center = (float(cx), float(cy))
+            if self._is_duplicate_center(center, existing_centers + accepted, min_dist * 0.5):
+                continue
+            accepted.append(center)
+
+        return accepted
 
     @staticmethod
     def _not_found(reason: str) -> MarkerDetection:
@@ -283,4 +354,5 @@ class MarkerBracketDetector:
             center_y=None,
             dot_count=0,
             reason=reason,
+            dot_centers=(),
         )

@@ -18,7 +18,7 @@ from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.convoying.packages.target_tracker_activity import TargetTracker
 from tasks.convoying.packages.convoy_controller_statemachine import ConvoyController
 from tasks.convoying.packages.red_line_gate import RedLineGate
-from tasks.convoying.packages.follow_types import SEARCH, FOLLOWING, STOPPED, LOST_TARGET, TOO_CLOSE_STATE
+from tasks.convoying.packages.follow_types import SEARCH
 
 from servers.convoying.visualization import create_convoying_visualization
 from servers.templates.convoying import CONVOYING_TEMPLATE as HTML_TEMPLATE
@@ -132,7 +132,7 @@ def visualize(frame_bgr):
            frame_rgb here would swap channels during its internal
            cvtColor and produce a slightly wrong grayscale/HSV read)
         -> lane servoing if allowed (fallback steering source)
-        -> convoy state machine (SEARCH/FOLLOWING/STOPPED/LOST_TARGET/
+        -> convoy state machine (SEARCH/FOLLOW_LEFT/FOLLOW_CENTER/FOLLOW_RIGHT/STOPPED/LOST_TARGET/
            TOO_CLOSE_STATE), using the marker as primary steering signal
            and lane servoing as fallback when the marker isn't trusted
         -> wheel speeds (autonomous command, OR manual override)
@@ -479,12 +479,29 @@ def update_config():
             convoy_ctrl.steering_gain = float(data['steering_gain'])
         if 'steering_sign' in data:
             convoy_ctrl.steering_sign = float(data['steering_sign'])
+        if 'lane_gain' in data:
+            convoy_ctrl.lane_gain = float(data['lane_gain'])
+        if 'leader_gain' in data:
+            convoy_ctrl.leader_gain = float(data['leader_gain'])
+        if 'minimum_detected_dots' in data:
+            convoy_ctrl.minimum_detected_dots = int(data['minimum_detected_dots'])
+        if 'region_majority_ratio' in data:
+            convoy_ctrl.region_majority_ratio = float(data['region_majority_ratio'])
         if 'search_speed' in data:
             convoy_ctrl.search_speed = float(data['search_speed'])
         if 'stop_detection_timeout' in data:
             convoy_ctrl.stop_detection_timeout = float(data['stop_detection_timeout'])
         if 'lost_target_timeout' in data:
             convoy_ctrl.lost_target_timeout = float(data['lost_target_timeout'])
+
+    marker_detector = tracker.marker_detector if tracker is not None else None
+    if marker_detector is not None:
+        if 'minimum_detected_dots' in data:
+            marker_detector.minimum_detected_dots = int(data['minimum_detected_dots'])
+        if 'min_hole_radius' in data:
+            marker_detector.min_hole_radius = float(data['min_hole_radius'])
+        if 'max_hole_radius' in data:
+            marker_detector.max_hole_radius = float(data['max_hole_radius'])
 
     return jsonify({
         'close_multiplier': convoy_ctrl.close_multiplier if convoy_ctrl else None,
@@ -493,9 +510,15 @@ def update_config():
         'max_speed': convoy_ctrl.max_speed if convoy_ctrl else None,
         'steering_gain': convoy_ctrl.steering_gain if convoy_ctrl else None,
         'steering_sign': convoy_ctrl.steering_sign if convoy_ctrl else None,
+        'lane_gain': convoy_ctrl.lane_gain if convoy_ctrl else None,
+        'leader_gain': convoy_ctrl.leader_gain if convoy_ctrl else None,
+        'minimum_detected_dots': convoy_ctrl.minimum_detected_dots if convoy_ctrl else None,
+        'region_majority_ratio': convoy_ctrl.region_majority_ratio if convoy_ctrl else None,
         'search_speed': convoy_ctrl.search_speed if convoy_ctrl else None,
         'stop_detection_timeout': convoy_ctrl.stop_detection_timeout if convoy_ctrl else None,
         'lost_target_timeout': convoy_ctrl.lost_target_timeout if convoy_ctrl else None,
+        'min_hole_radius': marker_detector.min_hole_radius if marker_detector else None,
+        'max_hole_radius': marker_detector.max_hole_radius if marker_detector else None,
     })
 
 
@@ -522,6 +545,7 @@ def _target_to_dict(target):
         'marker_bbox': target.marker_bbox,
         'marker_center_x': target.marker_center_x,
         'marker_center_y': target.marker_center_y,
+        'marker_dot_centers': target.marker_dot_centers,
     }
 
 

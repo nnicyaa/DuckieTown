@@ -17,6 +17,7 @@ def create_convoying_visualization(
 
     camera_panel = cv2.resize(image_bgr, (display_w, display_h))
 
+    _draw_regions(camera_panel, display_w, display_h)
     _draw_detections(camera_panel, detections, w, h, display_w, display_h)
     _draw_target(camera_panel, target, w, h, display_w, display_h)
     _draw_marker(camera_panel, target, w, h, display_w, display_h)
@@ -32,6 +33,30 @@ def create_convoying_visualization(
 
     top = np.hstack([camera_panel, lane_panel])
     return np.vstack([top, info_panel])
+
+
+def _draw_regions(panel, display_w, display_h):
+    left_boundary = display_w // 3
+    right_boundary = (2 * display_w) // 3
+
+    for x in (left_boundary, right_boundary):
+        cv2.line(panel, (x, 0), (x, display_h - 1), (80, 80, 80), 1)
+
+    labels = [
+        ("LEFT", left_boundary // 2 - 18),
+        ("CENTER", (left_boundary + right_boundary) // 2 - 28),
+        ("RIGHT", (right_boundary + display_w) // 2 - 22),
+    ]
+    for text, x in labels:
+        cv2.putText(
+            panel,
+            text,
+            (max(4, x), display_h - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (120, 120, 120),
+            1,
+        )
 
 
 def _draw_detections(panel, detections, orig_w, orig_h, display_w, display_h):
@@ -118,6 +143,10 @@ def _draw_marker(panel, target, orig_w, orig_h, display_w, display_h):
     sx = display_w / float(orig_w)
     sy = display_h / float(orig_h)
 
+    for dot_x, _ in getattr(target, "marker_dot_centers", ()) or ():
+        dx = int(dot_x * sx)
+        cv2.line(panel, (dx, 0), (dx, display_h - 1), (180, 0, 180), 1)
+
     x1, y1, x2, y2 = target.marker_bbox
     dx1 = int(x1 * sx)
     dy1 = int(y1 * sy)
@@ -129,6 +158,7 @@ def _draw_marker(panel, target, orig_w, orig_h, display_w, display_h):
     if target.marker_center_x is not None and target.marker_center_y is not None:
         mx = int(target.marker_center_x * sx)
         my = int(target.marker_center_y * sy)
+        cv2.line(panel, (mx, 0), (mx, display_h - 1), (255, 0, 255), 2)
         cv2.drawMarker(
             panel,
             (mx, my),

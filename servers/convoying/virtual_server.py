@@ -16,8 +16,9 @@ import numpy as np
 from tasks.object_detection.packages.agent import ObjectDetectionAgent
 from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.convoying.packages.target_tracker_activity import TargetTracker
-from tasks.convoying.packages.convoy_controller_activity import ConvoyController
+from tasks.convoying.packages.convoy_controller_statemachine import ConvoyController
 from tasks.convoying.packages.red_line_gate import RedLineGate
+from tasks.convoying.packages.follow_types import SEARCH
 
 from servers.convoying.visualization import create_convoying_visualization
 from servers.templates.convoying import CONVOYING_TEMPLATE as HTML_TEMPLATE
@@ -53,6 +54,9 @@ _last_command = None
 _last_lane_left = 0.0
 _last_lane_right = 0.0
 _last_red_line_state = None
+
+# Prints only when follower state changes.
+_last_follower_state = SEARCH
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +103,17 @@ def visualize(frame_rgb):
     Called for every MJPEG frame. frame_rgb is RGB from the Godot camera.
 
     Pipeline:
-        camera frame
+        camera frame (RGB)
         -> red line gate
         -> push downscaled copy to detection thread
         -> grab latest scaled detections
         -> blue truck fallback if YOLO misses truck
-        -> target tracking
-        -> lane servoing if allowed
-        -> convoy controller
+        -> target + marker-bracket tracking (needs a BGR frame --
+           MarkerBracketDetector's HSV/grayscale thresholds are BGR-based,
+           so frame_rgb is converted to BGR just for this call)
+        -> lane servoing if allowed (fallback steering source)
+        -> convoy state machine (SEARCH/FOLLOW_LEFT/FOLLOW_CENTER/FOLLOW_RIGHT/STOPPED/LOST_TARGET/
+           TOO_CLOSE_STATE)
         -> wheel speeds
         -> browser visualization
     """
@@ -116,6 +123,7 @@ def visualize(frame_rgb):
     global _last_lane_left
     global _last_lane_right
     global _last_red_line_state
+    global _last_follower_state
 
     if frame_rgb is None:
         return _placeholder("Waiting for Godot camera...")
@@ -148,12 +156,21 @@ def visualize(frame_rgb):
     # Use last VALID target, not last frame target, because last frame may be LOST.
     detections = _add_blue_truck_fallback(frame_rgb, detections, _last_valid_target)
 
-    # Target tracking.
+    # Target + marker-bracket tracking.
+    # MarkerBracketDetector expects BGR (it uses cv2.COLOR_BGR2GRAY /
+    # cv2.COLOR_BGR2HSV internally) -- frame_rgb from the Godot camera is
+    # RGB, so convert once here before handing it to the tracker. Passing
+    # frame_rgb directly would swap the red/blue channels during the
+    # detector's internal color conversion and skew the white-plate mask
+    # and dark-hole threshold.
+    frame_bgr_for_marker = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+
     if tracker is not None:
         target = tracker.update(
             detections=detections,
             image_height=image_height,
             image_width=image_width,
+            frame_bgr=frame_bgr_for_marker,
         )
     else:
         return cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
@@ -162,8 +179,9 @@ def visualize(frame_rgb):
         _last_valid_target = target
 
     # Lane servoing.
-    # Important: when lane_disabled is True, we DO NOT use lane commands.
-    # The controller will steer only toward the leader truck.
+    # Used as a fallback steering source by the state machine (SEARCH /
+    # LOST_TARGET) when the marker bracket isn't currently trusted. Still
+    # skipped entirely when lane_disabled (red-line window).
     if lane_agent is not None and not lane_disabled:
         try:
             lane_left, lane_right = lane_agent.compute_commands(frame_rgb)
@@ -173,9 +191,7 @@ def visualize(frame_rgb):
     else:
         lane_left, lane_right = 0.0, 0.0
 
-    # Convoy controller.
-    # Normal mode: lane_left/lane_right steer the bot.
-    # Red-line mode: lane_disabled=True, controller ignores lane and follows leader only.
+    # Convoy state machine.
     command = convoy_controller.decide(
         target=target,
         lane_left=lane_left,
@@ -184,6 +200,11 @@ def visualize(frame_rgb):
         image_height=image_height,
         lane_disabled=lane_disabled,
     )
+
+    follower_state = command.state if command is not None else SEARCH
+    if follower_state != _last_follower_state:
+        print(f"[Convoying] STATE {_last_follower_state} -> {follower_state}")
+        _last_follower_state = follower_state
 
     # Drive wheels.
     game_over = wheels.is_game_over() if wheels is not None else False
@@ -262,6 +283,7 @@ def reset():
     global _last_valid_target
     global _last_command
     global _last_red_line_state
+    global _last_follower_state
 
     running = False
 
@@ -271,6 +293,9 @@ def reset():
 
     if tracker is not None:
         tracker.reset()
+
+    if convoy_controller is not None:
+        convoy_controller.reset()
 
     if red_line_gate is not None:
         red_line_gate.reset()
@@ -282,6 +307,7 @@ def reset():
     _last_valid_target = None
     _last_command = None
     _last_red_line_state = None
+    _last_follower_state = SEARCH
 
     print("[Convoying] Reset")
     return jsonify({'status': 'reset'})
@@ -308,6 +334,7 @@ def status():
         'lane_left': _last_lane_left,
         'lane_right': _last_lane_right,
         'red_line': _red_line_to_dict(_last_red_line_state),
+        'follower_state': _last_follower_state,
     })
 
 
@@ -326,19 +353,54 @@ def update_config():
         if 'max_speed' in data:
             convoy_controller.max_speed = float(data['max_speed'])
 
-        # Optional leader-only tuning from browser/API.
-        if 'leader_steering_gain' in data:
-            convoy_controller.leader_steering_gain = float(data['leader_steering_gain'])
-        if 'leader_steering_sign' in data:
-            convoy_controller.leader_steering_sign = float(data['leader_steering_sign'])
+        # Renamed from leader_steering_gain/leader_steering_sign in the old
+        # ConvoyController -- the state-machine version uses steering_gain/
+        # steering_sign since steering now applies in FOLLOW_* generally,
+        # not just in a "leader-only" red-line mode.
+        if 'steering_gain' in data:
+            convoy_controller.steering_gain = float(data['steering_gain'])
+        if 'steering_sign' in data:
+            convoy_controller.steering_sign = float(data['steering_sign'])
+        if 'lane_gain' in data:
+            convoy_controller.lane_gain = float(data['lane_gain'])
+        if 'leader_gain' in data:
+            convoy_controller.leader_gain = float(data['leader_gain'])
+        if 'minimum_detected_dots' in data:
+            convoy_controller.minimum_detected_dots = int(data['minimum_detected_dots'])
+        if 'region_majority_ratio' in data:
+            convoy_controller.region_majority_ratio = float(data['region_majority_ratio'])
+        if 'search_speed' in data:
+            convoy_controller.search_speed = float(data['search_speed'])
+        if 'stop_detection_timeout' in data:
+            convoy_controller.stop_detection_timeout = float(data['stop_detection_timeout'])
+        if 'lost_target_timeout' in data:
+            convoy_controller.lost_target_timeout = float(data['lost_target_timeout'])
+
+    marker_detector = tracker.marker_detector if tracker is not None else None
+    if marker_detector is not None:
+        if 'minimum_detected_dots' in data:
+            marker_detector.minimum_detected_dots = int(data['minimum_detected_dots'])
+        if 'min_hole_radius' in data:
+            marker_detector.min_hole_radius = float(data['min_hole_radius'])
+        if 'max_hole_radius' in data:
+            marker_detector.max_hole_radius = float(data['max_hole_radius'])
 
     return jsonify({
         'close_multiplier': convoy_controller.close_multiplier if convoy_controller else None,
         'good_multiplier': convoy_controller.good_multiplier if convoy_controller else None,
         'far_multiplier': convoy_controller.far_multiplier if convoy_controller else None,
         'max_speed': convoy_controller.max_speed if convoy_controller else None,
-        'leader_steering_gain': convoy_controller.leader_steering_gain if convoy_controller else None,
-        'leader_steering_sign': convoy_controller.leader_steering_sign if convoy_controller else None,
+        'steering_gain': convoy_controller.steering_gain if convoy_controller else None,
+        'steering_sign': convoy_controller.steering_sign if convoy_controller else None,
+        'lane_gain': convoy_controller.lane_gain if convoy_controller else None,
+        'leader_gain': convoy_controller.leader_gain if convoy_controller else None,
+        'minimum_detected_dots': convoy_controller.minimum_detected_dots if convoy_controller else None,
+        'region_majority_ratio': convoy_controller.region_majority_ratio if convoy_controller else None,
+        'search_speed': convoy_controller.search_speed if convoy_controller else None,
+        'stop_detection_timeout': convoy_controller.stop_detection_timeout if convoy_controller else None,
+        'lost_target_timeout': convoy_controller.lost_target_timeout if convoy_controller else None,
+        'min_hole_radius': marker_detector.min_hole_radius if marker_detector else None,
+        'max_hole_radius': marker_detector.max_hole_radius if marker_detector else None,
     })
 
 
@@ -394,7 +456,7 @@ def _add_blue_truck_fallback(frame_rgb, detections, last_target=None):
     for contour in contours:
         x, y, bw, bh = cv2.boundingRect(contour)
 
-        if bw < 16 or bh < 20:
+        if bw < 10 or bh < 12:
             continue
 
         # Tighten box around dense blue region.
@@ -406,16 +468,16 @@ def _add_blue_truck_fallback(frame_rgb, detections, last_target=None):
         center_x = x + bw / 2.0
         center_y = y + bh / 2.0
 
-        if area < 700:
+        if area < 300:
             continue
 
         # Signs are usually higher; truck body should be lower enough.
-        if bottom_y < h * 0.28:
+        if bottom_y < h * 0.18:
             continue
 
         # Reject huge merged boxes, but allow partial side-view on turns.
         aspect = bw / float(max(1, bh))
-        if aspect > 1.45:
+        if aspect > 2.20:
             continue
 
         # Reject blue blobs overlapping YOLO sign boxes.
@@ -425,7 +487,7 @@ def _add_blue_truck_fallback(frame_rgb, detections, last_target=None):
         # If we do not have previous target, avoid starting from extreme edge.
         # If we do have previous target, edge is allowed because turn can push truck sideways.
         if previous_center is None:
-            if center_x < w * 0.08 or center_x > w * 0.92:
+            if center_x < w * 0.03 or center_x > w * 0.97:
                 continue
 
         if previous_center is not None:
@@ -532,6 +594,11 @@ def _target_to_dict(target):
         'class_id': target.class_id,
         'distance_state': target.distance_state,
         'reason': target.reason,
+        'dot_count': target.dot_count,
+        'marker_bbox': target.marker_bbox,
+        'marker_center_x': target.marker_center_x,
+        'marker_center_y': target.marker_center_y,
+        'marker_dot_centers': target.marker_dot_centers,
     }
 
 
@@ -545,6 +612,7 @@ def _command_to_dict(command):
         'right_speed': command.right_speed,
         'speed_multiplier': command.speed_multiplier,
         'reason': command.reason,
+        'state': command.state,
     }
 
 
@@ -598,7 +666,7 @@ def main():
     suppress_http_logs()
 
     print("=" * 60)
-    print("VIRTUAL CONVOYING SERVER")
+    print("VIRTUAL CONVOYING SERVER (marker-bracket state machine)")
     print("=" * 60)
 
     print("\n[1/5] Initializing wheels driver...")
@@ -638,8 +706,8 @@ def main():
     convoy_controller = ConvoyController()
     red_line_gate = RedLineGate(disable_seconds=5.0)
 
-    print("  Tracker ready")
-    print("  Controller ready")
+    print("  Tracker ready (marker-bracket detection enabled)")
+    print("  Controller ready (state machine: SEARCH/FOLLOW_LEFT/FOLLOW_CENTER/FOLLOW_RIGHT/STOPPED/LOST_TARGET)")
     print("  Red-line gate ready: lane disabled for 5 seconds after close red line")
 
     threading.Thread(target=_detection_loop, daemon=True).start()

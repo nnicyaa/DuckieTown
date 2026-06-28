@@ -10,7 +10,9 @@ from tasks.convoying.packages.follow_types import (
     TOO_CLOSE,
     LOST,
     SEARCH,
-    FOLLOWING,
+    FOLLOW_LEFT,
+    FOLLOW_CENTER,
+    FOLLOW_RIGHT,
     STOPPED,
     LOST_TARGET,
     TOO_CLOSE_STATE,
@@ -18,6 +20,7 @@ from tasks.convoying.packages.follow_types import (
 
 _IDEAL_BOTTOM_RATIO = 0.58
 _NARROW_WIDTH_RATIO = 0.12
+_FOLLOW_STATES = (FOLLOW_LEFT, FOLLOW_CENTER, FOLLOW_RIGHT)
 
 
 class ConvoyController:
@@ -30,8 +33,9 @@ class ConvoyController:
                          using lane following if available and not
                          disabled (red-line gate); otherwise crawl forward
                          with no steering bias, looking.
-        FOLLOWING       marker trusted this frame -- steer continuously
-                         toward the marker's position, speed from distance.
+        FOLLOW_LEFT     2/3+ visible dots are in the left image region.
+        FOLLOW_CENTER   dots are centered, or neither side has a 2/3 majority.
+        FOLLOW_RIGHT    2/3+ visible dots are in the right image region.
         TOO_CLOSE_STATE marker very close -- hard stop, distinct from a
                          lost target so it's clear from state alone why the
                          robot stopped.
@@ -40,23 +44,16 @@ class ConvoyController:
                          leader is inferred to have stopped. Distinct from
                          LOST_TARGET: here we can still see the leader, it's
                          just not moving.
-        LOST_TARGET     marker not found this frame, but we were FOLLOWING
+        LOST_TARGET     marker not found this frame, but we were following
                          recently. Steers using lane following if available
                          and not disabled; otherwise continues in the last
                          known marker-steering direction. Either way, after
                          lost_target_timeout seconds with no marker, drops
                          to SEARCH.
 
-    Steering note: per spec, the natural region-vote design is left/center/
-    right with 2/3-majority voting. This implementation instead uses
-    continuous proportional steering driven by the marker's centroid
-    position -- a deliberate deviation, chosen because discrete region
-    voting introduces steering-angle discontinuities at region boundaries,
-    which is the same class of issue that caused oscillation in earlier
-    iterations of this robot's lane controller. Continuous control fed by a
-    clean, gated signal (the marker centroid, only trusted once dot_count
-    clears minimum_detected_dots) satisfies the same intent -- smooth,
-    noise-resistant steering toward the leader -- without that failure mode.
+    The state is selected discretely from a 2/3 dot-region vote, while the
+    wheel command remains continuous. That keeps the finite-state machine
+    readable without adding hard steering discontinuities at region edges.
     """
 
     def __init__(
@@ -68,8 +65,12 @@ class ConvoyController:
 
         # Steering (continuous, from marker centroid error).
         steering_gain: float = 1.25,
+        lane_gain: float = 0.65,
+        leader_gain: float = 0.85,
         max_steer_ratio: float = 0.95,
         steering_sign: float = 1.0,
+        minimum_detected_dots: int = 3,
+        region_majority_ratio: float = 2.0 / 3.0,
 
         # SEARCH state behavior.
         search_speed: float = 0.08,
@@ -77,6 +78,20 @@ class ConvoyController:
         # LOST_TARGET behavior.
         lost_target_timeout: float = 2.5,    # seconds before LOST_TARGET -> SEARCH
         lost_target_speed_multiplier: float = 0.35,
+        # The replayed steering error decays linearly to zero over this
+        # many seconds during LOST_TARGET, rather than being held constant
+        # for the full lost_target_timeout window. A constant replay of a
+        # single frame's steering error is what produced sustained
+        # circling when that error was inflated by closeness/overlap right
+        # before the marker was lost.
+        lost_target_steering_decay_seconds: float = 0.6,
+        # If the marker is lost while the last known distance_state was
+        # CLOSE/TOO_CLOSE, the steering error captured at the instant of
+        # loss is clamped to this magnitude before any decay is applied --
+        # closeness/overlap with the leader makes the whole-truck bbox
+        # center (and therefore the proportional error) unreliable, so we
+        # don't trust a large value from that moment.
+        close_loss_max_steering_error: float = 0.25,
 
         # STOPPED detection: leader inferred stationary if marker centroid
         # and size haven't moved more than these tolerances for
@@ -94,13 +109,19 @@ class ConvoyController:
         self.max_speed = max_speed
 
         self.steering_gain = steering_gain
+        self.lane_gain = lane_gain
+        self.leader_gain = leader_gain
         self.max_steer_ratio = max_steer_ratio
         self.steering_sign = steering_sign
+        self.minimum_detected_dots = minimum_detected_dots
+        self.region_majority_ratio = region_majority_ratio
 
         self.search_speed = search_speed
 
         self.lost_target_timeout = lost_target_timeout
         self.lost_target_speed_multiplier = lost_target_speed_multiplier
+        self.lost_target_steering_decay_seconds = lost_target_steering_decay_seconds
+        self.close_loss_max_steering_error = close_loss_max_steering_error
 
         self.stop_detection_timeout = stop_detection_timeout
         self.stationary_position_tolerance_px = stationary_position_tolerance_px
@@ -112,9 +133,18 @@ class ConvoyController:
         self._state = SEARCH
 
         # Last known steering direction/error, used by LOST_TARGET to keep
-        # steering the same way while searching, per spec.
+        # steering the same way while searching, per spec -- but decayed
+        # over time rather than held constant (see
+        # lost_target_steering_decay_seconds above).
         self._last_steering_error = 0.0
         self._lost_target_since: Optional[float] = None
+
+        # Tracks distance_state from the most recent frame the marker (or
+        # at minimum the whole-truck bbox) was found, specifically so we
+        # can detect "we just lost the marker right after being very
+        # close" -- see the close_loss_max_steering_error handling in
+        # decide().
+        self._last_known_distance_state: str = LOST
 
         # Stationary-leader detection bookkeeping.
         self._stationary_since: Optional[float] = None
@@ -128,6 +158,7 @@ class ConvoyController:
         self._state = SEARCH
         self._last_steering_error = 0.0
         self._lost_target_since = None
+        self._last_known_distance_state = LOST
         self._stationary_since = None
         self._last_marker_center = None
         self._last_marker_diagonal = None
@@ -148,11 +179,9 @@ class ConvoyController:
     ) -> ConvoyCommand:
         """
         Marker-bracket position is the primary steering signal whenever the
-        marker is trusted (FOLLOWING state). lane_left/lane_right are used
-        as a fallback steering source in SEARCH and LOST_TARGET -- i.e.
-        whenever the marker isn't currently trusted -- so the robot keeps
-        driving correctly within its lane while looking for the leader,
-        rather than crawling at a fixed speed with no steering input.
+        marker is trusted. lane_left/lane_right are combined with the leader
+        signal during FOLLOW_* and used as a fallback steering source in
+        SEARCH and LOST_TARGET.
         lane_disabled (from the red-line gate) suppresses that fallback the
         same way it suppresses lane following elsewhere in this project --
         if we're in a red-line/crossroad window AND the marker is lost,
@@ -160,10 +189,15 @@ class ConvoyController:
         guess.
         """
         now = time.monotonic()
-        marker_found = target.found and target.dot_count > 0 and target.marker_center_x is not None
+        marker_found = (
+            target.found
+            and target.dot_count >= self.minimum_detected_dots
+            and target.marker_center_x is not None
+        )
 
         if marker_found:
             self._lost_target_since = None
+            self._last_known_distance_state = target.distance_state
             self._update_stationary_tracking(target, now)
 
             if target.distance_state == TOO_CLOSE:
@@ -182,13 +216,38 @@ class ConvoyController:
             if self._state == STOPPED:
                 self._resume_started_at = now
 
-            self._state = FOLLOWING
-            return self._following_command(target, image_width, image_height, now)
+            self._state = self._decide_follow_state(target, image_width)
+            return self._following_command(
+                target,
+                image_width,
+                image_height,
+                now,
+                lane_left,
+                lane_right,
+                lane_disabled,
+            )
 
         # Marker not found this frame.
-        if self._state in (FOLLOWING, STOPPED, TOO_CLOSE_STATE):
+        if self._state in (*_FOLLOW_STATES, STOPPED, TOO_CLOSE_STATE):
             self._state = LOST_TARGET
             self._lost_target_since = now
+
+            # Safety: if we were CLOSE/TOO_CLOSE right before losing the
+            # marker, the most likely cause is the leader filling/exceeding
+            # the frame (overlap/near-collision) rather than the leader
+            # truly vanishing -- YOLO's whole-truck bbox is unreliable at
+            # extreme proximity. In that case, do NOT trust whatever
+            # steering error was active the instant we lost it: that error
+            # was very likely inflated by closeness, and replaying it
+            # blindly for the full lost_target_timeout window is exactly
+            # what produces sustained circling. Clamp it hard instead.
+            if self._last_known_distance_state in (CLOSE, TOO_CLOSE):
+                self._last_steering_error = self._clamp_range(
+                    self._last_steering_error,
+                    -self.close_loss_max_steering_error,
+                    self.close_loss_max_steering_error,
+                )
+
             self._stationary_since = None
 
         lane_fallback_available = not lane_disabled and (lane_left != 0.0 or lane_right != 0.0)
@@ -203,7 +262,7 @@ class ConvoyController:
                     lane_left, lane_right, "lost_target_lane_fallback", LOST_TARGET
                 )
             else:
-                return self._lost_target_command()
+                return self._lost_target_command(now)
 
         # SEARCH.
         self._state = SEARCH
@@ -213,14 +272,9 @@ class ConvoyController:
                 lane_left, lane_right, "search_lane_fallback", SEARCH
             )
 
-        if lane_disabled:
-            # No marker, no lane signal available (red-line window) -- no
-            # reliable steering source at all. Stop rather than guess.
-            return self._stop("search_no_marker_no_lane_lane_disabled_stop")
-
         return self._search_command()
 
-    # -- FOLLOWING -----------------------------------------------------
+    # -- FOLLOW_* ------------------------------------------------------
 
     def _following_command(
         self,
@@ -228,12 +282,20 @@ class ConvoyController:
         image_width: Optional[int],
         image_height: Optional[int],
         now: float,
+        lane_left: float,
+        lane_right: float,
+        lane_disabled: bool,
     ) -> ConvoyCommand:
         if image_width is None or image_width <= 0:
             return self._stop("following_no_image_width_stop")
 
-        error = self._marker_center_error(target, image_width)
-        error *= self.steering_sign
+        leader_error = self._marker_center_error(target, image_width) * self.steering_sign
+        lane_error = 0.0 if lane_disabled else self._lane_steering_error(lane_left, lane_right)
+        error = self._clamp_range(
+            self.lane_gain * lane_error + self.leader_gain * leader_error,
+            -1.0,
+            1.0,
+        )
         self._last_steering_error = error
 
         multiplier = self._follow_multiplier(target, image_height, image_width)
@@ -264,8 +326,29 @@ class ConvoyController:
             right_speed=right_speed,
             speed_multiplier=multiplier,
             reason=reason,
-            state=FOLLOWING,
+            state=self._state,
         )
+
+    def _decide_follow_state(self, target: TargetInfo, image_width: Optional[int]) -> str:
+        if image_width is None or image_width <= 0:
+            return FOLLOW_CENTER
+
+        dots = tuple(getattr(target, "marker_dot_centers", ()) or ())
+        if len(dots) < self.minimum_detected_dots:
+            return FOLLOW_CENTER
+
+        left_limit = image_width / 3.0
+        right_limit = 2.0 * image_width / 3.0
+
+        left_count = sum(1 for x, _ in dots if x < left_limit)
+        right_count = sum(1 for x, _ in dots if x >= right_limit)
+        dot_count = float(len(dots))
+
+        if left_count / dot_count >= self.region_majority_ratio:
+            return FOLLOW_LEFT
+        if right_count / dot_count >= self.region_majority_ratio:
+            return FOLLOW_RIGHT
+        return FOLLOW_CENTER
 
     def _apply_resume_ramp(self, target_multiplier: float, now: float) -> float:
         if self._resume_started_at is None:
@@ -302,11 +385,32 @@ class ConvoyController:
             )
             behind = max(behind, narrow)
 
+        if target.marker_bbox is not None and image_width and image_width > 0:
+            marker_width = max(0, target.marker_bbox[2] - target.marker_bbox[0])
+            marker_width_ratio = marker_width / float(image_width)
+            desired_marker_width_ratio = 0.16
+            marker_far = max(
+                0.0,
+                min(
+                    1.0,
+                    (desired_marker_width_ratio - marker_width_ratio)
+                    / desired_marker_width_ratio,
+                ),
+            )
+            behind = max(behind, marker_far)
+
         return self.good_multiplier + behind * (self.far_multiplier - self.good_multiplier)
 
     def _marker_center_error(self, target: TargetInfo, image_width: int) -> float:
         half_width = image_width / 2.0
         return (half_width - float(target.marker_center_x)) / half_width
+
+    @staticmethod
+    def _lane_steering_error(lane_left: float, lane_right: float) -> float:
+        total = abs(lane_left) + abs(lane_right)
+        if total <= 1e-6:
+            return 0.0
+        return max(-1.0, min(1.0, (lane_right - lane_left) / total))
 
     # -- STOPPED / stationary detection ---------------------------------
 
@@ -385,7 +489,7 @@ class ConvoyController:
 
     # -- LOST_TARGET -----------------------------------------------------
 
-    def _lost_target_command(self) -> ConvoyCommand:
+    def _lost_target_command(self, now: float) -> ConvoyCommand:
         """
         Keep steering in the last known direction while searching, per
         spec, rather than going straight or stopping outright -- this gives
@@ -393,7 +497,13 @@ class ConvoyController:
         only briefly clipped at the edge.
         """
         max_steer = self.max_speed * self.max_steer_ratio
-        steering = self._last_steering_error * self.steering_gain * self.max_speed
+        error = self._last_steering_error
+        if self._lost_target_since is not None and self.lost_target_steering_decay_seconds > 0:
+            elapsed = now - self._lost_target_since
+            decay = max(0.0, 1.0 - elapsed / self.lost_target_steering_decay_seconds)
+            error *= decay
+
+        steering = error * self.steering_gain * self.max_speed
         steering = self._clamp_range(steering, -max_steer, max_steer)
 
         base_speed = self.max_speed * self.lost_target_speed_multiplier

@@ -85,7 +85,7 @@ class TargetTracker:
         detection. If None, dot_count/marker_* fields are left at their
         defaults (0/None) -- the caller still gets whole-truck tracking,
         just without marker data. Callers using ConvoyController's
-        FOLLOWING state need frame_bgr passed here, since that state checks
+        FOLLOW_* states need frame_bgr passed here, since those states check
         dot_count/marker_center_x.
         """
         if image_width is None:
@@ -216,6 +216,7 @@ class TargetTracker:
         marker_bbox = None
         marker_center_x = None
         marker_center_y = None
+        marker_dot_centers = ()
 
         if frame_bgr is not None:
             search_bbox = self._expand_bbox(bbox, image_width, image_height)
@@ -226,6 +227,7 @@ class TargetTracker:
                 marker_bbox = marker.bbox
                 marker_center_x = marker.center_x
                 marker_center_y = marker.center_y
+                marker_dot_centers = marker.dot_centers
 
         return TargetInfo(
             found=True,
@@ -242,6 +244,7 @@ class TargetTracker:
             marker_bbox=marker_bbox,
             marker_center_x=marker_center_x,
             marker_center_y=marker_center_y,
+            marker_dot_centers=marker_dot_centers,
         )
 
     def _expand_bbox(

@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 BBox = Tuple[int, int, int, int]
+Point = Tuple[float, float]
 
 FAR = "FAR"
 GOOD = "GOOD"
@@ -11,7 +12,9 @@ LOST = "LOST"
 
 # Explicit follower states (state machine, see ConvoyController).
 SEARCH = "SEARCH"
-FOLLOWING = "FOLLOWING"
+FOLLOW_LEFT = "FOLLOW_LEFT"
+FOLLOW_CENTER = "FOLLOW_CENTER"
+FOLLOW_RIGHT = "FOLLOW_RIGHT"
 STOPPED = "STOPPED"
 LOST_TARGET = "LOST_TARGET"
 TOO_CLOSE_STATE = "TOO_CLOSE_STATE"  # distinct name from distance_state's TOO_CLOSE to avoid clashing
@@ -41,6 +44,7 @@ class TargetInfo:
     marker_bbox: Optional[BBox] = None
     marker_center_x: Optional[float] = None
     marker_center_y: Optional[float] = None
+    marker_dot_centers: Tuple[Point, ...] = ()
 
 
 @dataclass
@@ -50,6 +54,5 @@ class ConvoyCommand:
     right_speed: float
     speed_multiplier: float
     reason: str
-    # Current follower state machine state (SEARCH/FOLLOWING/STOPPED/
-    # LOST_TARGET/TOO_CLOSE_STATE), exposed for visualization/debugging.
-    state: str = FOLLOWING
+    # Current follower state machine state, exposed for visualization/debugging.
+    state: str = FOLLOW_CENTER

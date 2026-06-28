@@ -29,7 +29,9 @@ _EXTRA_CSS = '''
     text-transform: uppercase;
 }
 .state-badge.SEARCH          { background: rgba(139,148,158,0.15); border: 1px solid var(--text-muted);    color: var(--text-muted); }
-.state-badge.FOLLOWING       { background: rgba(63,185,80,0.15);   border: 1px solid var(--accent-green);  color: var(--accent-green); }
+.state-badge.FOLLOW_LEFT     { background: rgba(31,111,235,0.15);  border: 1px solid var(--accent-blue);   color: var(--accent-blue); }
+.state-badge.FOLLOW_CENTER   { background: rgba(63,185,80,0.15);   border: 1px solid var(--accent-green);  color: var(--accent-green); }
+.state-badge.FOLLOW_RIGHT    { background: rgba(31,111,235,0.15);  border: 1px solid var(--accent-blue);   color: var(--accent-blue); }
 .state-badge.STOPPED         { background: rgba(210,153,34,0.15);  border: 1px solid var(--accent-orange); color: var(--accent-orange); }
 .state-badge.LOST_TARGET     { background: rgba(210,153,34,0.15);  border: 1px solid #d6a63a;              color: #d6a63a; }
 .state-badge.TOO_CLOSE_STATE { background: rgba(248,81,73,0.15);   border: 1px solid var(--accent-red);    color: var(--accent-red); }
@@ -286,6 +288,26 @@ _CONTENT = '''
                     <div class="slider-controls">
                         <input type="range" class="slider" id="steer-gain-slider" min="0" max="3" step="0.05" value="1.25"
                                oninput="document.getElementById('steer-gain-val').textContent=parseFloat(this.value).toFixed(2); sendConfig()">
+                    </div>
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Lane weight</span>
+                        <span id="lane-gain-val">0.65</span>
+                    </div>
+                    <div class="slider-controls">
+                        <input type="range" class="slider" id="lane-gain-slider" min="0" max="2" step="0.05" value="0.65"
+                               oninput="document.getElementById('lane-gain-val').textContent=parseFloat(this.value).toFixed(2); sendConfig()">
+                    </div>
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label">
+                        <span>Leader weight</span>
+                        <span id="leader-gain-val">0.85</span>
+                    </div>
+                    <div class="slider-controls">
+                        <input type="range" class="slider" id="leader-gain-slider" min="0" max="2" step="0.05" value="0.85"
+                               oninput="document.getElementById('leader-gain-val').textContent=parseFloat(this.value).toFixed(2); sendConfig()">
                     </div>
                 </div>
                 <div class="slider-group">
@@ -554,6 +576,8 @@ function sendConfig() {
         good_multiplier:  parseFloat(document.getElementById('good-slider').value),
         far_multiplier:   parseFloat(document.getElementById('far-slider').value),
         steering_gain:    parseFloat(document.getElementById('steer-gain-slider').value),
+        lane_gain:        parseFloat(document.getElementById('lane-gain-slider').value),
+        leader_gain:      parseFloat(document.getElementById('leader-gain-slider').value),
         search_speed:     parseFloat(document.getElementById('search-speed-slider').value),
     };
     postJSONraw('/update_config', data)
@@ -568,7 +592,7 @@ updateStatus();
 
 CONVOYING_TEMPLATE = render_template(
     title    = "Convoying — Marker-Based Following",
-    subtitle = "State machine (SEARCH / FOLLOWING / STOPPED / LOST_TARGET) driven by the leader's marker bracket",
+    subtitle = "State machine (SEARCH / FOLLOW_LEFT / FOLLOW_CENTER / FOLLOW_RIGHT / STOPPED / LOST_TARGET) driven by the leader's marker bracket",
     content_html = _CONTENT,
     extra_css    = _EXTRA_CSS,
     extra_js     = _EXTRA_JS,
