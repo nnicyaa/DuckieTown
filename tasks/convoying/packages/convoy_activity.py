@@ -40,6 +40,16 @@ class ConvoyController:
         leader_max_steer_ratio: float = 0.95,
         leader_steering_sign: float = 1.0,
 
+        # Leader-only steering noise reduction.
+        # At long range the leader's bbox is small, so its center estimate
+        # is noisier relative to the box itself, and that noise gets
+        # amplified after normalization by image half-width. Without
+        # smoothing/deadband this produces oscillation specifically when
+        # the leader is far (matches the FAR-distance symptom).
+        leader_error_smoothing: float = 0.3,    # EMA alpha, lower = smoother/slower
+        leader_error_deadband: float = 0.04,    # ignore tiny noise around zero
+        leader_far_gain_scale: float = 0.6,     # extra damping applied only when FAR
+
         # Leader-turn detection settings (used only while lane_disabled=True).
         # The leader's center-x error is smoothed (EMA) to avoid noise causing
         # false turn detections. Hysteresis (different enter/exit thresholds
@@ -50,6 +60,27 @@ class ConvoyController:
         turn_enter_frames: int = 3,
         turn_exit_frames: int = 5,
         turn_error_smoothing: float = 0.4,
+
+        # Short-loss handling (target briefly undetected, e.g. mid-turn
+        # occlusion/edge-clipping). These prevent a single missed detection
+        # from nuking EMA smoothing state or causing a hard stop, which was
+        # producing visible stop/lurch and sharp-correction artifacts that
+        # look like oscillation.
+        turn_lost_grace_frames: int = 6,
+        smoothing_reset_lost_frames: int = 4,
+
+        # Approach-rate speed compensation.
+        # Distance-bucket multipliers (close/good/far) only react after the
+        # gap to the leader has already changed enough to cross a bucket
+        # boundary -- inherently a step behind a leader that's actively
+        # accelerating or decelerating. approach_rate (px/frame change in
+        # the leader's bbox bottom_y, smoothed in TargetTracker) lets us
+        # react to the leader's motion directly: pulling away -> speed up
+        # immediately; closing in -> slow down immediately. This is added
+        # as a multiplicative adjustment on top of the existing bucket
+        # multiplier, not a replacement for it.
+        approach_rate_gain: float = 0.012,      # speed adjustment per px/frame of approach_rate
+        approach_rate_max_adjust: float = 0.35,  # clamp on the adjustment, as a fraction of base speed
     ):
         self.close_multiplier = close_multiplier
         self.good_multiplier = good_multiplier
@@ -63,11 +94,26 @@ class ConvoyController:
         self.leader_max_steer_ratio = leader_max_steer_ratio
         self.leader_steering_sign = leader_steering_sign
 
+        self.leader_error_smoothing = leader_error_smoothing
+        self.leader_error_deadband = leader_error_deadband
+        self.leader_far_gain_scale = leader_far_gain_scale
+
+        # EMA state for the leader-only steering error (separate from the
+        # turn-detection EMA below -- different purposes, can use different
+        # smoothing factors).
+        self._smoothed_leader_error: Optional[float] = None
+
         self.turn_error_enter_threshold = turn_error_enter_threshold
         self.turn_error_exit_threshold = turn_error_exit_threshold
         self.turn_enter_frames = turn_enter_frames
         self.turn_exit_frames = turn_exit_frames
         self.turn_error_smoothing = turn_error_smoothing
+
+        self.turn_lost_grace_frames = turn_lost_grace_frames
+        self.smoothing_reset_lost_frames = smoothing_reset_lost_frames
+
+        self.approach_rate_gain = approach_rate_gain
+        self.approach_rate_max_adjust = approach_rate_max_adjust
 
         self._had_target = False
         self._lost_frames = 0
@@ -106,10 +152,10 @@ class ConvoyController:
                     # Leader is turning: use lane following to make the turn
                     # smooth instead of chasing the leader's swinging bbox.
                     return self._scale_for_distance(
-                        target=target,
                         lane_left=lane_left,
                         lane_right=lane_right,
                         reason_suffix="red_line_leader_turning_lane_following",
+                        target=target,
                     )
 
                 return self._leader_only_command(
@@ -122,11 +168,15 @@ class ConvoyController:
             self._reset_turn_state()
 
             # Normal lane-following behavior.
+            # The bucket multiplier (close/good/far) is adjusted by
+            # approach_rate so we react to the leader actively pulling away
+            # or closing in, instead of only reacting once the gap has
+            # already crossed a distance-state boundary.
             if target.distance_state == CLOSE:
                 return self._scale(
                     lane_left,
                     lane_right,
-                    self.close_multiplier,
+                    self._adjusted_multiplier(self.close_multiplier, target.approach_rate),
                     "target_close_slow_down_lane_following",
                 )
 
@@ -134,7 +184,7 @@ class ConvoyController:
                 return self._scale(
                     lane_left,
                     lane_right,
-                    self.good_multiplier,
+                    self._adjusted_multiplier(self.good_multiplier, target.approach_rate),
                     "good_distance_lane_following",
                 )
 
@@ -142,7 +192,7 @@ class ConvoyController:
                 return self._scale(
                     lane_left,
                     lane_right,
-                    self.far_multiplier,
+                    self._adjusted_multiplier(self.far_multiplier, target.approach_rate),
                     "target_far_speed_up_lane_following",
                 )
 
@@ -150,13 +200,40 @@ class ConvoyController:
         self._lost_frames += 1
 
         # Important:
-        # If lane is disabled because of red line, do NOT continue lane following.
-        # If leader is lost at crossroad, stop.
+        # If lane is disabled because of red line, prefer NOT to slam to a
+        # full stop on every brief loss -- a leader can disappear from frame
+        # for a few frames purely because it's mid-turn (swinging toward the
+        # edge, partial occlusion). Stopping immediately and then lurching
+        # back to speed on reacquisition looks identical to oscillation.
+        #
+        # If we were already tracking the leader as "turning" right before
+        # losing it, keep using lane following at a reduced speed for a
+        # short grace window -- this is the most likely turn-occlusion case.
+        # If we were NOT mid-turn (leader was going straight) or the grace
+        # window expires, fall back to a full stop as before -- that case is
+        # more likely a genuine leader loss at a crossroad, where stopping
+        # is the safe choice.
         if lane_disabled:
+            if self._leader_is_turning and self._lost_frames <= self.turn_lost_grace_frames:
+                return self._scale_for_distance(
+                    lane_left=lane_left,
+                    lane_right=lane_right,
+                    reason_suffix="red_line_leader_turning_lost_briefly_keep_lane",
+                    target_distance_state=self._last_distance_state,
+                )
             self._reset_turn_state()
             return self._stop("lane_disabled_target_lost_stop")
 
-        self._reset_turn_state()
+        # Outside a red-line window: don't nuke turn-detection/error
+        # smoothing on every single lost frame. A leader briefly dropping
+        # out of detection for 1-2 frames during a turn is normal noise --
+        # resetting the EMA here means the next reacquired frame uses a
+        # fresh, unsmoothed error as its seed, producing one sharp
+        # uncorrected steering kick right when the leader reappears
+        # off-center (most likely right after a turn). Only reset once the
+        # loss has actually persisted.
+        if self._lost_frames > self.smoothing_reset_lost_frames:
+            self._reset_turn_state()
 
         if self._last_distance_state == TOO_CLOSE:
             return self._stop("target_lost_after_too_close_emergency_stop")
@@ -181,6 +258,32 @@ class ConvoyController:
             )
 
         return self._stop("target_lost_stop")
+
+    def _adjusted_multiplier(self, base_multiplier: float, approach_rate: Optional[float]) -> float:
+        """
+        Adjusts a distance-bucket speed multiplier using the leader's
+        approach_rate (smoothed px/frame change in its bbox bottom_y).
+
+        approach_rate > 0  -> leader getting closer/bigger -> we should slow
+                               down a bit even within the same bucket.
+        approach_rate < 0  -> leader pulling away/shrinking -> we should
+                               speed up to keep pace, instead of waiting for
+                               the gap to cross into the next bucket first.
+
+        The adjustment is intentionally small and clamped
+        (approach_rate_max_adjust) -- this is a continuous nudge on top of
+        the existing bucket logic, not a replacement for it. distance_state
+        still does the heavy lifting (stopping when TOO_CLOSE, etc).
+        """
+        if not approach_rate:
+            return base_multiplier
+
+        # Negative approach_rate (pulling away) should INCREASE speed, so
+        # the sign is flipped here.
+        adjustment = -approach_rate * self.approach_rate_gain
+        adjustment = max(-self.approach_rate_max_adjust, min(self.approach_rate_max_adjust, adjustment))
+
+        return max(0.0, base_multiplier * (1.0 + adjustment))
 
     def _update_turn_detection(
         self,
@@ -237,22 +340,29 @@ class ConvoyController:
         self._leader_is_turning = False
         self._above_threshold_frames = 0
         self._below_threshold_frames = 0
+        self._smoothed_leader_error = None
 
     def _scale_for_distance(
         self,
-        target: TargetInfo,
         lane_left: float,
         lane_right: float,
         reason_suffix: str,
+        target: Optional[TargetInfo] = None,
+        target_distance_state: Optional[str] = None,
     ) -> ConvoyCommand:
-        if target.distance_state == CLOSE:
+        distance_state = target.distance_state if target is not None else target_distance_state
+        approach_rate = target.approach_rate if target is not None else None
+
+        if distance_state == CLOSE:
             multiplier = self.close_multiplier
-        elif target.distance_state == GOOD:
+        elif distance_state == GOOD:
             multiplier = self.good_multiplier
-        elif target.distance_state == FAR:
+        elif distance_state == FAR:
             multiplier = self.far_multiplier
         else:
             return self._stop("red_line_turn_invalid_distance_state")
+
+        multiplier = self._adjusted_multiplier(multiplier, approach_rate)
 
         return self._scale(lane_left, lane_right, multiplier, reason_suffix)
 
@@ -264,24 +374,53 @@ class ConvoyController:
         if image_width is None or image_width <= 0 or target.center_x is None:
             return self._stop("leader_only_no_target_center_stop")
 
-        error = self._target_center_error(target, image_width)
-        error *= self.leader_steering_sign
+        raw_error = self._target_center_error(target, image_width)
+        raw_error *= self.leader_steering_sign
 
-        # Distance still controls forward speed.
+        # Smooth the error (EMA) -- the leader's bbox is small at long range,
+        # so its center estimate is noisy relative to box size, and that
+        # noise gets amplified by normalization. Without this, oscillation
+        # shows up specifically when the leader is FAR.
+        if self._smoothed_leader_error is None:
+            self._smoothed_leader_error = raw_error
+        else:
+            alpha = self.leader_error_smoothing
+            self._smoothed_leader_error = (
+                alpha * raw_error + (1.0 - alpha) * self._smoothed_leader_error
+            )
+
+        error = self._smoothed_leader_error
+
+        # Deadband: ignore tiny residual noise around zero so the bot
+        # doesn't twitch left-right when the leader is essentially centered.
+        if abs(error) < self.leader_error_deadband:
+            error = 0.0
+
+        # Distance still controls forward speed, adjusted by approach_rate
+        # so the bot reacts to the leader actively accelerating/decelerating
+        # rather than only reacting once distance_state itself changes.
         if target.distance_state == CLOSE:
-            base_speed = self.max_speed * 0.30
+            speed_fraction = 0.30
             reason = "red_line_leader_only_close_slow_down"
+            gain_scale = 1.0
         elif target.distance_state == GOOD:
-            base_speed = self.max_speed * 0.70
+            speed_fraction = 0.70
             reason = "red_line_leader_only_good_distance"
+            gain_scale = 1.0
         elif target.distance_state == FAR:
-            base_speed = self.max_speed * 0.95
+            speed_fraction = 0.95
             reason = "red_line_leader_only_far_speed_up"
+            # Extra damping at FAR distance, where the bbox-center estimate
+            # is least reliable -- this is the case that was oscillating.
+            gain_scale = self.leader_far_gain_scale
         else:
             return self._stop("red_line_leader_only_invalid_distance_state")
 
+        speed_fraction = self._adjusted_multiplier(speed_fraction, target.approach_rate)
+        base_speed = self.max_speed * speed_fraction
+
         max_steer = self.max_speed * self.leader_max_steer_ratio
-        steering = error * self.leader_steering_gain * self.max_speed
+        steering = error * self.leader_steering_gain * gain_scale * self.max_speed
         steering = self._clamp_range(steering, -max_steer, max_steer)
 
         # Differential drive:

@@ -23,6 +23,15 @@ class TargetInfo:
     distance_state: str
     reason: str
 
+    # NEW: smoothed rate of change of bottom_y, in pixels/frame.
+    # Positive  = leader getting closer (bottom_y increasing, bbox growing).
+    # Negative  = leader pulling away (bottom_y decreasing, bbox shrinking).
+    # Zero/None = no rate available yet (first frame after acquiring target,
+    #             or target was just reacquired after being lost).
+    # Defaulted so any existing code constructing TargetInfo without this
+    # field keeps working unchanged.
+    approach_rate: Optional[float] = 0.0
+
 
 @dataclass
 class ConvoyCommand:

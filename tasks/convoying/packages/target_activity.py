@@ -39,21 +39,32 @@ class TargetTracker:
             min_score: float = 0.20,
             min_area: int = 800,
             max_center_shift_ratio: float = 0.70,
+            # Smoothing for approach_rate (bottom_y velocity). Lower alpha =
+            # smoother but slower to react. Kept separate from detection
+            # noise filtering elsewhere since this feeds a speed term, not
+            # steering -- a laggy speed response is far less safety-critical
+            # than laggy steering, so we can afford to smooth more here.
+            approach_rate_smoothing: float = 0.35,
     ):
         self.target_class_ids = target_class_ids
         self.rejected_class_ids = rejected_class_ids
         self.min_score = min_score
         self.min_area = min_area
         self.max_center_shift_ratio = max_center_shift_ratio
+        self.approach_rate_smoothing = approach_rate_smoothing
 
         self._has_target = False
         self._last_center_x: Optional[float] = None
         self._last_center_y: Optional[float] = None
+        self._last_bottom_y: Optional[float] = None
+        self._smoothed_approach_rate: Optional[float] = None
 
     def reset(self) -> None:
         self._has_target = False
         self._last_center_x = None
         self._last_center_y = None
+        self._last_bottom_y = None
+        self._smoothed_approach_rate = None
 
     def update(
         self,
@@ -81,6 +92,8 @@ class TargetTracker:
                 detection=selected,
                 image_height=image_height,
                 reason="initial_target_selected",
+                # No previous bottom_y to compare against on first sighting.
+                has_previous_bottom_y=False,
             )
 
         selected = self._match_previous_target(
@@ -96,6 +109,7 @@ class TargetTracker:
             detection=selected,
             image_height=image_height,
             reason="target_tracked",
+            has_previous_bottom_y=True,
         )
 
     def _is_valid_target(self, detection: Detection) -> bool:
@@ -164,6 +178,7 @@ class TargetTracker:
         detection: Detection,
         image_height: int,
         reason: str,
+        has_previous_bottom_y: bool,
     ) -> TargetInfo:
         bbox, score, class_id = detection
         _, _, _, bottom_y = bbox
@@ -172,9 +187,15 @@ class TargetTracker:
         area = self._area(bbox)
         distance_state = self._distance_state(bottom_y, image_height)
 
+        approach_rate = self._update_approach_rate(
+            bottom_y=float(bottom_y),
+            has_previous_bottom_y=has_previous_bottom_y,
+        )
+
         self._has_target = True
         self._last_center_x = center_x
         self._last_center_y = center_y
+        self._last_bottom_y = float(bottom_y)
 
         return TargetInfo(
             found=True,
@@ -187,9 +208,54 @@ class TargetTracker:
             class_id=int(class_id),
             distance_state=distance_state,
             reason=reason,
+            approach_rate=approach_rate,
         )
 
+    def _update_approach_rate(
+        self,
+        bottom_y: float,
+        has_previous_bottom_y: bool,
+    ) -> float:
+        """
+        Smoothed pixels/frame rate of change of bottom_y.
+
+        Positive -> leader is getting closer (bbox growing -> we should
+                    slow down to avoid closing the gap too fast).
+        Negative -> leader is pulling away (bbox shrinking -> we should
+                    speed up to keep up).
+
+        Returns 0.0 (no adjustment) on the first sighting or right after
+        reacquisition, since there's no valid previous bottom_y yet and a
+        raw jump from "no target" to "found at distance X" is not a real
+        velocity -- treating it as one would cause a spurious speed kick
+        right when the target reappears, which is exactly the kind of
+        artifact we're trying to avoid.
+        """
+        if not has_previous_bottom_y or self._last_bottom_y is None:
+            self._smoothed_approach_rate = 0.0
+            return 0.0
+
+        raw_rate = bottom_y - self._last_bottom_y
+
+        if self._smoothed_approach_rate is None:
+            self._smoothed_approach_rate = raw_rate
+        else:
+            alpha = self.approach_rate_smoothing
+            self._smoothed_approach_rate = (
+                alpha * raw_rate + (1.0 - alpha) * self._smoothed_approach_rate
+            )
+
+        return self._smoothed_approach_rate
+
     def _lost(self, reason: str) -> TargetInfo:
+        # Don't carry over bottom_y across a loss -- when the target is
+        # reacquired, has_previous_bottom_y will be forced to a fresh start
+        # via _match_previous_target's normal flow, but we explicitly reset
+        # the smoothed rate here too so a stale velocity estimate can't leak
+        # into the next sighting.
+        self._smoothed_approach_rate = None
+        self._last_bottom_y = None
+
         return TargetInfo(
             found=False,
             bbox=None,
@@ -201,6 +267,7 @@ class TargetTracker:
             class_id=None,
             distance_state=LOST,
             reason=reason,
+            approach_rate=0.0,
         )
 
     def _build_no_target_reason(self, detections: List[Detection]) -> str:
