@@ -16,8 +16,9 @@ from flask import Flask, Response, render_template_string, jsonify, request
 from tasks.object_detection.packages.agent import ObjectDetectionAgent
 from tasks.visual_lane_servoing.packages.agent import LaneServoingAgent
 from tasks.convoying.packages.target_tracker_activity import TargetTracker
-from tasks.convoying.packages.convoy_controller_activity import ConvoyController
+from tasks.convoying.packages.convoy_controller_statemachine import ConvoyController
 from tasks.convoying.packages.red_line_gate import RedLineGate
+from tasks.convoying.packages.follow_types import SEARCH, FOLLOWING, STOPPED, LOST_TARGET, TOO_CLOSE_STATE
 
 from servers.convoying.visualization import create_convoying_visualization
 from servers.templates.convoying import CONVOYING_TEMPLATE as HTML_TEMPLATE
@@ -55,9 +56,27 @@ _last_lane_right = 0.0
 _last_red_line_state = None
 
 # Prints only when lane mode changes.
-# False = normal lane + leader following.
-# True  = lane disabled, leader-only following.
 _last_lane_disabled = False
+
+# Prints only when follower state changes.
+_last_follower_state = SEARCH
+
+# ---------------------------------------------------------------------------
+# Manual driving state
+# ---------------------------------------------------------------------------
+# When manual_mode is True, the autonomous pipeline (detection, marker
+# tracking, lane servoing, convoy state machine) keeps running every frame
+# exactly as before -- this is what feeds the visualization/debug panel --
+# but its computed command is NOT sent to the wheels. Instead the wheels
+# are driven from _manual_left/_manual_right, set by POST /manual/drive
+# (arrow keys / on-screen D-pad in the browser).
+manual_mode = False
+_manual_lock = threading.Lock()
+_manual_left = 0.0
+_manual_right = 0.0
+
+MANUAL_MAX_SPEED = 0.30
+MANUAL_TURN_RATIO = 0.6
 
 
 # ---------------------------------------------------------------------------
@@ -104,13 +123,19 @@ def visualize(frame_bgr):
     frame_bgr: BGR frame from the real camera (CameraDriver.read() returns BGR).
 
     Pipeline:
-        camera frame
-        -> red line gate
-        -> object detection (async thread)
-        -> target tracking
-        -> lane servoing if allowed
-        -> convoy controller
-        -> wheel speeds
+        camera frame (BGR)
+        -> frame_rgb derived for red-line gate / lane servoing (which
+           expect RGB, per their existing implementations)
+        -> object detection (async thread, operates on frame_rgb)
+        -> target + marker-bracket tracking (operates on frame_bgr --
+           MarkerBracketDetector's color thresholds are BGR-based; passing
+           frame_rgb here would swap channels during its internal
+           cvtColor and produce a slightly wrong grayscale/HSV read)
+        -> lane servoing if allowed (fallback steering source)
+        -> convoy state machine (SEARCH/FOLLOWING/STOPPED/LOST_TARGET/
+           TOO_CLOSE_STATE), using the marker as primary steering signal
+           and lane servoing as fallback when the marker isn't trusted
+        -> wheel speeds (autonomous command, OR manual override)
         -> browser visualization
     """
     global _last_target
@@ -120,6 +145,7 @@ def visualize(frame_bgr):
     global _last_lane_right
     global _last_red_line_state
     global _last_lane_disabled
+    global _last_follower_state
 
     if frame_bgr is None:
         return frame_bgr
@@ -137,7 +163,6 @@ def visualize(frame_bgr):
     _last_red_line_state = red_line_state
     lane_disabled = bool(red_line_state and red_line_state.lane_disabled)
 
-    # Print only when mode changes.
     if lane_disabled != _last_lane_disabled:
         if lane_disabled:
             remaining = getattr(red_line_state, "disabled_remaining", 0.0)
@@ -167,12 +192,15 @@ def visualize(frame_bgr):
     with _detection_lock:
         detections = list(_last_detections)
 
-    # Target tracking.
+    # Target + marker-bracket tracking.
+    # frame_bgr (NOT frame_rgb) is passed here -- see the pipeline note in
+    # this function's docstring for why that matters.
     if tracker is not None:
         target = tracker.update(
             detections=detections,
             image_height=image_height,
             image_width=image_width,
+            frame_bgr=frame_bgr,
         )
     else:
         target = _last_target
@@ -181,8 +209,11 @@ def visualize(frame_bgr):
         _last_valid_target = target
 
     # Lane servoing.
-    # Important: when lane_disabled is True, do NOT use lane commands.
-    # The controller will steer only toward the leader truck.
+    # Used as a fallback steering source by the state machine (SEARCH /
+    # LOST_TARGET) when the marker bracket isn't currently trusted. Still
+    # skipped entirely when lane_disabled (red-line window), same as
+    # before -- the state machine treats "no lane signal" as a reason to
+    # stop rather than guess, if the marker is also unavailable then.
     if lane_agent is not None and not lane_disabled:
         try:
             lane_left, lane_right = lane_agent.compute_commands(frame_rgb)
@@ -192,9 +223,8 @@ def visualize(frame_bgr):
     else:
         lane_left, lane_right = 0.0, 0.0
 
-    # Convoy controller.
-    # Normal mode: lane_left/lane_right steer the bot.
-    # Red-line mode: lane_disabled=True, controller ignores lane and follows leader only.
+    # Convoy state machine.
+    # Always runs (even in manual mode) so the debug panel stays live.
     if convoy_ctrl is not None and target is not None:
         command = convoy_ctrl.decide(
             target=target,
@@ -207,9 +237,22 @@ def visualize(frame_bgr):
     else:
         command = _last_command
 
+    follower_state = command.state if command is not None else SEARCH
+    if follower_state != _last_follower_state:
+        print(f"[Convoying] STATE {_last_follower_state} -> {follower_state}")
+        _last_follower_state = follower_state
+
     # Apply wheel commands only when running.
+    # In manual mode, the autonomous command above is computed (for the
+    # debug panel) but ignored here -- wheels are driven from the
+    # browser-controlled _manual_left/_manual_right instead.
     if wheels is not None:
-        if running and command is not None:
+        if not running:
+            wheels.set_wheels_speed(0.0, 0.0)
+        elif manual_mode:
+            with _manual_lock:
+                wheels.set_wheels_speed(_manual_left, _manual_right)
+        elif command is not None:
             wheels.set_wheels_speed(command.left_speed, command.right_speed)
         else:
             wheels.set_wheels_speed(0.0, 0.0)
@@ -282,6 +325,8 @@ def reset():
     global _last_command
     global _last_red_line_state
     global _last_lane_disabled
+    global _last_follower_state
+    global _manual_left, _manual_right
 
     running = False
 
@@ -291,17 +336,25 @@ def reset():
     if tracker is not None:
         tracker.reset()
 
+    if convoy_ctrl is not None:
+        convoy_ctrl.reset()
+
     if red_line_gate is not None:
         red_line_gate.reset()
 
     with _detection_lock:
         _last_detections = []
 
+    with _manual_lock:
+        _manual_left = 0.0
+        _manual_right = 0.0
+
     _last_target = None
     _last_valid_target = None
     _last_command = None
     _last_red_line_state = None
     _last_lane_disabled = False
+    _last_follower_state = SEARCH
 
     print("[Convoying] Reset")
     return jsonify({'status': 'reset'})
@@ -312,8 +365,83 @@ def get_running():
     return jsonify({'running': running})
 
 
+# ---------------------------------------------------------------------------
+# Manual driving routes
+# ---------------------------------------------------------------------------
+
+@app.route('/manual/enable', methods=['POST'])
+def manual_enable():
+    global manual_mode, _manual_left, _manual_right
+
+    manual_mode = True
+
+    with _manual_lock:
+        _manual_left = 0.0
+        _manual_right = 0.0
+
+    print("[Convoying] MANUAL MODE ENABLED — autonomous commands ignored")
+    return jsonify({'manual_mode': True})
+
+
+@app.route('/manual/disable', methods=['POST'])
+def manual_disable():
+    global manual_mode, _manual_left, _manual_right
+
+    manual_mode = False
+
+    with _manual_lock:
+        _manual_left = 0.0
+        _manual_right = 0.0
+
+    if wheels is not None:
+        wheels.set_wheels_speed(0.0, 0.0)
+
+    print("[Convoying] MANUAL MODE DISABLED — autonomous control resumed")
+    return jsonify({'manual_mode': False})
+
+
+@app.route('/manual/drive', methods=['POST'])
+def manual_drive():
+    """
+    Body: {"forward": -1..1, "turn": -1..1}
+    Combinable, e.g. forward=1, turn=0.5 drives forward while turning right.
+    Ignored unless manual_mode is currently enabled.
+    """
+    global _manual_left, _manual_right
+
+    if not manual_mode:
+        return jsonify({'ok': False, 'reason': 'manual_mode_not_enabled'}), 400
+
+    data = request.json or {}
+
+    forward = float(data.get('forward', 0.0))
+    turn = float(data.get('turn', 0.0))
+
+    forward = max(-1.0, min(1.0, forward))
+    turn = max(-1.0, min(1.0, turn))
+
+    base = forward * MANUAL_MAX_SPEED
+    steer = turn * MANUAL_MAX_SPEED * MANUAL_TURN_RATIO
+
+    left = base + steer
+    right = base - steer
+
+    left = max(-MANUAL_MAX_SPEED, min(MANUAL_MAX_SPEED, left))
+    right = max(-MANUAL_MAX_SPEED, min(MANUAL_MAX_SPEED, right))
+
+    with _manual_lock:
+        _manual_left = left
+        _manual_right = right
+
+    return jsonify({'ok': True, 'left_speed': left, 'right_speed': right})
+
+
 @app.route('/status')
 def status():
+    with _manual_lock:
+        manual_left = _manual_left
+        manual_right = _manual_right
+
     return jsonify({
         'running': running,
         'model_loaded': bool(getattr(object_agent, 'model_loaded', False)) if object_agent else False,
@@ -326,6 +454,10 @@ def status():
         'lane_right': _last_lane_right,
         'lane_disabled': _last_lane_disabled,
         'red_line': _red_line_to_dict(_last_red_line_state),
+        'follower_state': _last_follower_state,
+        'manual_mode': manual_mode,
+        'manual_left': manual_left,
+        'manual_right': manual_right,
     })
 
 
@@ -343,20 +475,27 @@ def update_config():
             convoy_ctrl.far_multiplier = float(data['far_multiplier'])
         if 'max_speed' in data:
             convoy_ctrl.max_speed = float(data['max_speed'])
-
-        # Optional leader-only tuning from browser/API.
-        if 'leader_steering_gain' in data:
-            convoy_ctrl.leader_steering_gain = float(data['leader_steering_gain'])
-        if 'leader_steering_sign' in data:
-            convoy_ctrl.leader_steering_sign = float(data['leader_steering_sign'])
+        if 'steering_gain' in data:
+            convoy_ctrl.steering_gain = float(data['steering_gain'])
+        if 'steering_sign' in data:
+            convoy_ctrl.steering_sign = float(data['steering_sign'])
+        if 'search_speed' in data:
+            convoy_ctrl.search_speed = float(data['search_speed'])
+        if 'stop_detection_timeout' in data:
+            convoy_ctrl.stop_detection_timeout = float(data['stop_detection_timeout'])
+        if 'lost_target_timeout' in data:
+            convoy_ctrl.lost_target_timeout = float(data['lost_target_timeout'])
 
     return jsonify({
         'close_multiplier': convoy_ctrl.close_multiplier if convoy_ctrl else None,
         'good_multiplier': convoy_ctrl.good_multiplier if convoy_ctrl else None,
         'far_multiplier': convoy_ctrl.far_multiplier if convoy_ctrl else None,
         'max_speed': convoy_ctrl.max_speed if convoy_ctrl else None,
-        'leader_steering_gain': convoy_ctrl.leader_steering_gain if convoy_ctrl else None,
-        'leader_steering_sign': convoy_ctrl.leader_steering_sign if convoy_ctrl else None,
+        'steering_gain': convoy_ctrl.steering_gain if convoy_ctrl else None,
+        'steering_sign': convoy_ctrl.steering_sign if convoy_ctrl else None,
+        'search_speed': convoy_ctrl.search_speed if convoy_ctrl else None,
+        'stop_detection_timeout': convoy_ctrl.stop_detection_timeout if convoy_ctrl else None,
+        'lost_target_timeout': convoy_ctrl.lost_target_timeout if convoy_ctrl else None,
     })
 
 
@@ -379,6 +518,10 @@ def _target_to_dict(target):
         'class_id': target.class_id,
         'distance_state': target.distance_state,
         'reason': target.reason,
+        'dot_count': target.dot_count,
+        'marker_bbox': target.marker_bbox,
+        'marker_center_x': target.marker_center_x,
+        'marker_center_y': target.marker_center_y,
     }
 
 
@@ -392,6 +535,7 @@ def _command_to_dict(command):
         'right_speed': command.right_speed,
         'speed_multiplier': command.speed_multiplier,
         'reason': command.reason,
+        'state': command.state,
     }
 
 
@@ -429,7 +573,7 @@ def main():
     suppress_http_logs()
 
     print("=" * 60)
-    print("CONVOYING — REAL ROBOT SERVER")
+    print("CONVOYING — REAL ROBOT SERVER (marker-bracket state machine)")
     print("=" * 60)
 
     def _init_wheels():
@@ -466,7 +610,7 @@ def main():
         convoy_ctrl = ConvoyController()
         red_line_gate = RedLineGate(disable_seconds=5.0)
 
-        print("[Init] Convoy tracker and controller ready")
+        print("[Init] Convoy state machine + marker tracker ready")
         print("[Init] Red-line gate ready: lane disabled for 5 seconds after close red line")
 
     threading.Thread(target=_init_wheels, daemon=True).start()

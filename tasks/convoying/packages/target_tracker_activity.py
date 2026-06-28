@@ -1,6 +1,8 @@
 from typing import List, Optional, Tuple
 import math
 
+import numpy as np
+
 from tasks.convoying.packages.follow_types import (
     TargetInfo,
     FAR,
@@ -9,6 +11,7 @@ from tasks.convoying.packages.follow_types import (
     TOO_CLOSE,
     LOST,
 )
+from tasks.convoying.packages.marker_bracket_detector import MarkerBracketDetector
 
 Detection = Tuple[Tuple[int, int, int, int], float, int]
 
@@ -30,6 +33,12 @@ class TargetTracker:
         0 = duckie fallback, because the model may classify vehicle-like objects differently
 
     It rejects signs by default.
+
+    In addition to whole-truck tracking (used for distance_state, the
+    primary bbox, and previous-frame matching), this now also runs
+    MarkerBracketDetector inside the matched truck's bbox to find the
+    leader's marker bracket and its dot_count. The marker fields on
+    TargetInfo are the trusted steering signal -- see ConvoyController.
     """
 
     def __init__(
@@ -39,12 +48,21 @@ class TargetTracker:
             min_score: float = 0.20,
             min_area: int = 800,
             max_center_shift_ratio: float = 0.70,
+            marker_detector: Optional[MarkerBracketDetector] = None,
+            # How much to expand the YOLO truck bbox before searching for
+            # the marker bracket inside it. The bracket is mounted on the
+            # truck's back and YOLO's box may crop it tightly, so a small
+            # margin avoids clipping the bracket's edge holes.
+            marker_search_margin_ratio: float = 0.10,
     ):
         self.target_class_ids = target_class_ids
         self.rejected_class_ids = rejected_class_ids
         self.min_score = min_score
         self.min_area = min_area
         self.max_center_shift_ratio = max_center_shift_ratio
+
+        self.marker_detector = marker_detector or MarkerBracketDetector()
+        self.marker_search_margin_ratio = marker_search_margin_ratio
 
         self._has_target = False
         self._last_center_x: Optional[float] = None
@@ -60,7 +78,16 @@ class TargetTracker:
         detections: Optional[List[Detection]],
         image_height: int,
         image_width: Optional[int] = None,
+        frame_bgr: Optional[np.ndarray] = None,
     ) -> TargetInfo:
+        """
+        frame_bgr: the camera frame (BGR), required to run marker bracket
+        detection. If None, dot_count/marker_* fields are left at their
+        defaults (0/None) -- the caller still gets whole-truck tracking,
+        just without marker data. Callers using ConvoyController's
+        FOLLOWING state need frame_bgr passed here, since that state checks
+        dot_count/marker_center_x.
+        """
         if image_width is None:
             image_width = image_height
 
@@ -82,6 +109,7 @@ class TargetTracker:
                 image_height=image_height,
                 image_width=image_width,
                 reason="initial_target_selected",
+                frame_bgr=frame_bgr,
             )
 
         selected = self._match_previous_target(
@@ -98,6 +126,7 @@ class TargetTracker:
             image_height=image_height,
             image_width=image_width,
             reason="target_tracked",
+            frame_bgr=frame_bgr,
         )
 
     def _is_valid_target(self, detection: Detection) -> bool:
@@ -167,6 +196,7 @@ class TargetTracker:
         image_height: int,
         reason: str,
         image_width: Optional[int] = None,
+        frame_bgr: Optional[np.ndarray] = None,
     ) -> TargetInfo:
         bbox, score, class_id = detection
         _, _, _, bottom_y = bbox
@@ -182,6 +212,21 @@ class TargetTracker:
         self._last_center_x = center_x
         self._last_center_y = center_y
 
+        dot_count = 0
+        marker_bbox = None
+        marker_center_x = None
+        marker_center_y = None
+
+        if frame_bgr is not None:
+            search_bbox = self._expand_bbox(bbox, image_width, image_height)
+            marker = self.marker_detector.detect(frame_bgr, search_bbox)
+
+            if marker.found:
+                dot_count = marker.dot_count
+                marker_bbox = marker.bbox
+                marker_center_x = marker.center_x
+                marker_center_y = marker.center_y
+
         return TargetInfo(
             found=True,
             bbox=bbox,
@@ -193,6 +238,30 @@ class TargetTracker:
             class_id=int(class_id),
             distance_state=distance_state,
             reason=reason,
+            dot_count=dot_count,
+            marker_bbox=marker_bbox,
+            marker_center_x=marker_center_x,
+            marker_center_y=marker_center_y,
+        )
+
+    def _expand_bbox(
+        self,
+        bbox: Tuple[int, int, int, int],
+        image_width: int,
+        image_height: int,
+    ) -> Tuple[int, int, int, int]:
+        x1, y1, x2, y2 = bbox
+        w = max(0, x2 - x1)
+        h = max(0, y2 - y1)
+
+        pad_x = int(w * self.marker_search_margin_ratio)
+        pad_y = int(h * self.marker_search_margin_ratio)
+
+        return (
+            max(0, x1 - pad_x),
+            max(0, y1 - pad_y),
+            min(image_width, x2 + pad_x),
+            min(image_height, y2 + pad_y),
         )
 
     def _lost(self, reason: str) -> TargetInfo:

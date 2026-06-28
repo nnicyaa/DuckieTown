@@ -136,7 +136,7 @@ _CONTENT = '''
 
                     <p>Main student files:</p>
                     <div class="file-path">tasks/convoying/packages/target_tracker_activity.py</div>
-                    <div class="file-path">tasks/convoying/packages/convoy_controller_activity.py</div>
+                    <div class="file-path">tasks/convoying/packages/convoy_controller_statemachine.py</div>
 
                     <p style="margin-top:8px">
                         Truck far = speed up.<br>

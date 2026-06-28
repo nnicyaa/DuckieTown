@@ -19,6 +19,7 @@ def create_convoying_visualization(
 
     _draw_detections(camera_panel, detections, w, h, display_w, display_h)
     _draw_target(camera_panel, target, w, h, display_w, display_h)
+    _draw_marker(camera_panel, target, w, h, display_w, display_h)
 
     lane_panel = _make_lane_panel(lane_debug_info, display_w, display_h)
     info_panel = _make_info_panel(
@@ -104,6 +105,51 @@ def _draw_target(panel, target, orig_w, orig_h, display_w, display_h):
     )
 
 
+def _draw_marker(panel, target, orig_w, orig_h, display_w, display_h):
+    """
+    Draws the marker bracket's own bounding box (distinct from the whole
+    truck bbox drawn by _draw_target) and the detected dot count. Drawn in
+    magenta to be visually distinct from the cyan truck box and green/red
+    YOLO detection boxes.
+    """
+    if target is None or not getattr(target, "marker_bbox", None):
+        return
+
+    sx = display_w / float(orig_w)
+    sy = display_h / float(orig_h)
+
+    x1, y1, x2, y2 = target.marker_bbox
+    dx1 = int(x1 * sx)
+    dy1 = int(y1 * sy)
+    dx2 = int(x2 * sx)
+    dy2 = int(y2 * sy)
+
+    cv2.rectangle(panel, (dx1, dy1), (dx2, dy2), (255, 0, 255), 2)
+
+    if target.marker_center_x is not None and target.marker_center_y is not None:
+        mx = int(target.marker_center_x * sx)
+        my = int(target.marker_center_y * sy)
+        cv2.drawMarker(
+            panel,
+            (mx, my),
+            (255, 0, 255),
+            markerType=cv2.MARKER_CROSS,
+            markerSize=10,
+            thickness=2,
+        )
+
+    dot_count = getattr(target, "dot_count", 0)
+    cv2.putText(
+        panel,
+        f"dots:{dot_count}",
+        (dx1, min(display_h - 5, dy2 + 14)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (255, 0, 255),
+        1,
+    )
+
+
 def _make_lane_panel(lane_debug_info, display_w, display_h):
     if not lane_debug_info or 'lane_mask' not in lane_debug_info:
         panel = np.zeros((display_h, display_w, 3), dtype=np.uint8)
@@ -136,7 +182,7 @@ def _make_lane_panel(lane_debug_info, display_w, display_h):
 
 
 def _make_info_panel(width, target, command, lane_left, lane_right):
-    height = 150
+    height = 170
     panel = np.zeros((height, width, 3), dtype=np.uint8)
     font = cv2.FONT_HERSHEY_SIMPLEX
 
@@ -144,16 +190,20 @@ def _make_info_panel(width, target, command, lane_left, lane_right):
         target_text = "Target: none"
         distance_text = "Distance: none"
         reason_text = "Reason: no target object"
+        dot_text = "Dots: 0"
     else:
         target_text = f"Target found: {target.found}"
         distance_text = f"Distance: {target.distance_state}"
         reason_text = f"Target reason: {target.reason}"
+        dot_text = f"Dots: {getattr(target, 'dot_count', 0)}"
 
     if command is None:
+        state_text = "State: none"
         command_text = "Command: none"
         speed_text = f"Lane L/R: {lane_left:.3f} / {lane_right:.3f}"
         multiplier_text = "Multiplier: none"
     else:
+        state_text = f"State: {getattr(command, 'state', '—')}"
         command_text = f"Move: {command.should_move} | {command.reason}"
         speed_text = (
             f"Lane L/R: {lane_left:.3f} / {lane_right:.3f}    "
@@ -162,17 +212,19 @@ def _make_info_panel(width, target, command, lane_left, lane_right):
         multiplier_text = f"Multiplier: {command.speed_multiplier:.2f}"
 
     lines = [
+        state_text,
         target_text,
         distance_text,
+        dot_text,
         reason_text,
         command_text,
         speed_text,
         multiplier_text,
     ]
 
-    y = 22
+    y = 20
     for line in lines:
-        cv2.putText(panel, line, (10, y), font, 0.45, (220, 220, 220), 1)
-        y += 22
+        cv2.putText(panel, line, (10, y), font, 0.42, (220, 220, 220), 1)
+        y += 20
 
     return panel
