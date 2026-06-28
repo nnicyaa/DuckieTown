@@ -67,6 +67,12 @@ def _draw_detections(panel, detections, orig_w, orig_h, display_w, display_h):
     sy = display_h / float(orig_h)
 
     for bbox, score, class_id in detections:
+        # Keep the main convoying overlay focused on leader candidates.
+        # Signs (class_id=2) are rejected by TargetTracker and were making
+        # the display look like the follower was chasing irrelevant objects.
+        if class_id != 1:
+            continue
+
         x1, y1, x2, y2 = bbox
 
         dx1 = int(x1 * sx)
@@ -74,9 +80,7 @@ def _draw_detections(panel, detections, orig_w, orig_h, display_w, display_h):
         dx2 = int(x2 * sx)
         dy2 = int(y2 * sy)
 
-        color = (255, 100, 100)
-        if class_id == 1:
-            color = (0, 255, 0)
+        color = (0, 255, 0)
 
         cv2.rectangle(panel, (dx1, dy1), (dx2, dy2), color, 1)
         cv2.putText(

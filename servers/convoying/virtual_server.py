@@ -475,20 +475,18 @@ def _add_blue_truck_fallback(frame_rgb, detections, last_target=None):
         if bottom_y < h * 0.18:
             continue
 
-        # Reject huge merged boxes, but allow partial side-view on turns.
+        touches_image_edge = x <= 2 or (x + bw) >= (w - 2)
+
+        # Reject huge merged boxes, but allow partial side-view/edge clips
+        # because the leader often leaves only a wide blue slice visible
+        # during lane changes and turns.
         aspect = bw / float(max(1, bh))
-        if aspect > 2.20:
+        if aspect > 6.0 and not touches_image_edge:
             continue
 
         # Reject blue blobs overlapping YOLO sign boxes.
-        if any(_iou(bbox, sign_bbox) > 0.04 for sign_bbox in sign_boxes):
+        if any(_iou(bbox, sign_bbox) > 0.04 for sign_bbox in sign_boxes) and bottom_y < h * 0.55:
             continue
-
-        # If we do not have previous target, avoid starting from extreme edge.
-        # If we do have previous target, edge is allowed because turn can push truck sideways.
-        if previous_center is None:
-            if center_x < w * 0.03 or center_x > w * 0.97:
-                continue
 
         if previous_center is not None:
             px, py = previous_center
